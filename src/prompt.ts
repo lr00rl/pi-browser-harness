@@ -37,8 +37,16 @@ ${connectionNotice}You control the user's running Chrome through \`browser_*\` t
 standard pi tools. Per-tool usage lives in tool descriptions, parameter schemas,
 and tool-specific guidelines.
 
-- Operate only inside this session's owned Chrome window. Never reach into the
-  user's other tabs or windows. Close owned tabs once no later step needs them.
+- By default, operate inside this session's owned Chrome window.
+- When the user explicitly requests control of an existing Chrome tab, call
+  browser_list_tabs with scope:'all', verify its URL and title, then call
+  browser_switch_tab with the exact targetId and allowUnowned:true.
+- Existing tabs require interactive user approval before they can be modified.
+  Borrowed tabs are never added to ownership and must not be closed by the harness.
+- Close owned tabs once no later step needs them; only owned tabs are cleaned up
+  automatically at session shutdown.
+- Do not use browser_run_script to bypass borrowed-tab approval or ownership
+  safety; use the raw CDP escape hatch only when the user explicitly asks for it.
 - Tools in the serialized lane (${joinShort(lanes.serialized)}) run one at a time.
   Tools in the parallel lane (${joinShort(lanes.parallel)}) may run concurrently
   with them. \`browser_run_script\` bypasses that lane: keep mutating scripts

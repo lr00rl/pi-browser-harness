@@ -52,7 +52,7 @@ Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
 
 | Tool | Lane | Summary |
 |---|---|---|
-| `browser_clear_headers` | serialized | Clear extra request headers from the current owned tab |
+| `browser_clear_headers` | serialized | Clear extra request headers from the current controlled tab |
 | `browser_click` | serialized | Click an element by ref (preferred) or pixel coordinates |
 | `browser_close_tab` | serialized | Close an owned tab |
 | `browser_console` | parallel | Read JS errors / console output on the current tab |
@@ -84,7 +84,7 @@ Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
 | `browser_scroll` | serialized | Scroll the page (deltaY positive=down, negative=up) |
 | `browser_select_option` | serialized | Select an option in a native <select> by ref (preferred) or selector |
 | `browser_set_checked` | serialized | Set a checkbox/radio checked state by ref |
-| `browser_set_headers` | serialized | Set extra request headers on the current owned tab |
+| `browser_set_headers` | serialized | Set extra request headers on the current controlled tab |
 | `browser_setup` | parallel | Initialize browser connection |
 | `browser_snapshot` | parallel | Get accessibility-tree snapshot with stable element refs (default for page inspection) |
 | `browser_switch_tab` | serialized | Switch tabs |

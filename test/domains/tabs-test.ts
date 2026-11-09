@@ -1,5 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createFakeClient, type FakeClient } from "./fake-client";
 import { handlerContext } from "./fake-client";
 import { withClient } from "./client-overrides";
@@ -24,6 +25,25 @@ const multiOwned = (): Promise<FakeClient> =>
       }),
     },
   });
+
+const approvalContext = (
+  client: FakeClient["client"],
+  approved: boolean,
+  hasUI = true,
+  seen?: (title: string, message: string) => void,
+) => ({
+  ...handlerContext(client),
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- tests only need the UI fields used by this handler
+  extensionCtx: {
+    hasUI,
+    ui: {
+      confirm: (title: string, message: string): Promise<boolean> => {
+        seen?.(title, message);
+        return Promise.resolve(approved);
+      },
+    },
+  } as unknown as ExtensionContext,
+});
 
 describe("browser_list_tabs", () => {
   test("defaults to owned tabs, including internal pages, and stores the filtered list in details", async () => {
@@ -173,6 +193,126 @@ describe("browser_switch_tab", () => {
     assert.equal(r.error.kind, "invalid_state");
     assert.match(r.error.message, /Tab CCCCCCCC0000 is not owned by this harness session \(namespace: fake\)/);
     assert.deepEqual(r.error.details, { targetId: "CCCCCCCC0000", namespace: "fake" });
+  });
+
+  test("borrowing requires the explicit allowUnowned flag", async () => {
+    const fake = await createFakeClient();
+    const switched: string[] = [];
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok(TABS)),
+      switchTab: (id) => {
+        switched.push(id);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+    const r = await switchTabTool.handler({ targetId: "u2" }, handlerContext(client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.deepEqual(switched, []);
+  });
+
+  test("borrowing fails closed when interactive UI is unavailable", async () => {
+    const fake = await createFakeClient();
+    const switched: string[] = [];
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok(TABS)),
+      switchTab: (id) => {
+        switched.push(id);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+    const r = await switchTabTool.handler(
+      { targetId: "u2", allowUnowned: true },
+      approvalContext(client, true, false),
+    );
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.match(r.error.message, /interactive user approval/);
+    assert.deepEqual(switched, []);
+  });
+
+  test("borrowing asks for approval and does not add the tab to ownership", async () => {
+    const fake = await createFakeClient();
+    const switched: string[] = [];
+    const approval: string[] = [];
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok(TABS)),
+      switchTab: (id) => {
+        switched.push(id);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+    const r = await switchTabTool.handler(
+      { targetId: "u2", allowUnowned: true },
+      approvalContext(client, true, true, (title, message) => approval.push(`${title}\n${message}`)),
+    );
+    assert.equal(r.success, true);
+    assert.deepEqual(switched, ["u2"]);
+    assert.equal(fake.client.owns("u2"), false);
+    assert.equal(fake.ownership.isBorrowed("u2"), true);
+    assert.equal(r.data.text, "Switched to u2 (borrowed; not owned)");
+    assert.deepEqual(r.data.details, { targetId: "u2" });
+    assert.deepEqual(approval, [
+      "Allow control of existing Chrome tab?\nURL: https://example.test/theirs\nTitle (page-controlled): Theirs\n\nPi will be able to read and modify this tab for the current session, but it will not close it.",
+    ]);
+  });
+
+  test("privileged Chrome pages cannot be borrowed", async () => {
+    const fake = await createFakeClient();
+    const switched: string[] = [];
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok([
+        { targetId: "chrome-tab", title: "Settings", url: "chrome://settings/" },
+      ])),
+      switchTab: (id) => {
+        switched.push(id);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+    const r = await switchTabTool.handler(
+      { targetId: "chrome-tab", allowUnowned: true },
+      approvalContext(client, true),
+    );
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.match(r.error.message, /privileged Chrome page/);
+    assert.deepEqual(switched, []);
+  });
+
+  test("borrowing requires the full target id, not a prefix", async () => {
+    const fake = await createFakeClient();
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok([
+        { targetId: "1234567890abcdef", title: "Theirs", url: "https://example.test/theirs" },
+      ])),
+    });
+    const r = await switchTabTool.handler(
+      { targetId: "12345678", allowUnowned: true },
+      approvalContext(client, true),
+    );
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_args");
+    assert.deepEqual(r.error.details, { targetId: "12345678" });
+  });
+
+  test("a declined borrow never switches tabs", async () => {
+    const fake = await createFakeClient();
+    const switched: string[] = [];
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok(TABS)),
+      switchTab: (id) => {
+        switched.push(id);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+    const r = await switchTabTool.handler(
+      { targetId: "u2", allowUnowned: true },
+      approvalContext(client, false),
+    );
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.match(r.error.message, /declined/);
+    assert.deepEqual(switched, []);
   });
 
   test("a switch failure is attributed to Target.attachToTarget unless the error names its own method", async () => {

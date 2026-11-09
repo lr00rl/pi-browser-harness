@@ -4,6 +4,11 @@ export type OwnershipRegistry = {
   has(targetId: string): boolean;
   list(): ReadonlyArray<string>;
   replaceAll(ids: ReadonlyArray<string>): void;
+  // Borrowed targets are protected from window adoption and cleanup, but are not persisted as owned.
+  borrow(targetId: string): void;
+  unborrow(targetId: string): void;
+  isBorrowed(targetId: string): boolean;
+  borrowedList(): ReadonlyArray<string>;
   setHarnessWindow(targetId: string | undefined): void;
   harnessWindow(): string | undefined;
   setHarnessWindowId(windowId: number | undefined): void;
@@ -20,6 +25,7 @@ export const createOwnershipRegistry = (
   },
 ): OwnershipRegistry => {
   const owned = new Set<string>(initial?.ownedTargetIds ?? []);
+  const borrowed = new Set<string>();
   let harnessWindow: string | undefined = initial?.harnessWindowTargetId;
   let harnessWindowId: number | undefined = initial?.harnessWindowId;
   const listeners = new Set<() => void>();
@@ -31,13 +37,14 @@ export const createOwnershipRegistry = (
 
   return {
     add(targetId) {
-      if (owned.has(targetId)) return;
+      if (borrowed.has(targetId) || owned.has(targetId)) return;
       owned.add(targetId);
       notify();
     },
     remove(targetId) {
-      if (!owned.has(targetId) && harnessWindow !== targetId) return;
+      if (!owned.has(targetId) && !borrowed.has(targetId) && harnessWindow !== targetId) return;
       owned.delete(targetId);
+      borrowed.delete(targetId);
       if (harnessWindow === targetId) harnessWindow = undefined;
       notify();
     },
@@ -49,8 +56,24 @@ export const createOwnershipRegistry = (
     },
     replaceAll(ids) {
       owned.clear();
-      for (const id of ids) owned.add(id);
+      for (const id of ids) {
+        if (!borrowed.has(id)) owned.add(id);
+      }
       notify();
+    },
+    borrow(targetId) {
+      if (borrowed.has(targetId)) return;
+      owned.delete(targetId);
+      borrowed.add(targetId);
+    },
+    unborrow(targetId) {
+      borrowed.delete(targetId);
+    },
+    isBorrowed(targetId) {
+      return borrowed.has(targetId);
+    },
+    borrowedList() {
+      return [...borrowed];
     },
     setHarnessWindow(targetId) {
       if (harnessWindow === targetId) return;

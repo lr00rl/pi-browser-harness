@@ -37,6 +37,29 @@ describe("OwnershipRegistry.onChange", () => {
   });
 });
 
+describe("borrowed targets", () => {
+  test("borrowed targets stay out of ownership and cannot be re-adopted", () => {
+    const reg = createOwnershipRegistry({ ownedTargetIds: ["owned"] });
+    reg.borrow("user");
+    reg.add("user");
+    reg.replaceAll(["owned", "user"]);
+
+    assert.equal(reg.has("user"), false);
+    assert.equal(reg.isBorrowed("user"), true);
+    assert.deepEqual(reg.borrowedList(), ["user"]);
+    assert.deepEqual(reg.list(), ["owned"]);
+  });
+
+  test("removing a destroyed borrowed target clears its protection", () => {
+    const reg = createOwnershipRegistry();
+    reg.borrow("user");
+    reg.remove("user");
+
+    assert.equal(reg.isBorrowed("user"), false);
+    assert.deepEqual(reg.borrowedList(), []);
+  });
+});
+
 describe("reconcileOwnership", () => {
   test("drops owned ids that are no longer live and returns the survivors", () => {
     const reg = createOwnershipRegistry({ ownedTargetIds: ["a", "b", "c"] });

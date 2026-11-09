@@ -55,6 +55,30 @@ describe("BrowserClient.pageInfo", () => {
   });
 });
 
+describe("BrowserClient.switchTab", () => {
+  test("does not decorate a borrowed tab", async () => {
+    const { stub, client } = await started({
+      "Browser.getWindowForTarget": [ok({ windowId: 7 }), ok({ windowId: 8 })],
+    });
+    stub.calls.length = 0;
+
+    const switched = await client.switchTab("t2");
+
+    assert.equal(switched.success, true);
+    assert.equal(stub.calls.some((call) => call.method === "Runtime.evaluate"), false);
+  });
+
+  test("decorates an owned tab", async () => {
+    const { stub, client } = await started();
+    stub.calls.length = 0;
+
+    const switched = await client.switchTab("t1");
+
+    assert.equal(switched.success, true);
+    assert.equal(stub.calls.filter((call) => call.method === "Runtime.evaluate").length, 1);
+  });
+});
+
 describe("BrowserClient.detach", () => {
   test("detaches every tracked session, not only the current one", async () => {
     const { stub, client } = await started();

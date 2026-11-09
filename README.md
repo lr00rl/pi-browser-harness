@@ -1,6 +1,6 @@
 # pi-browser-harness
 
-![pi-browser-harness](https://raw.githubusercontent.com/amankumarsingh77/pi-browser-harness/main/assets/hero.png)
+![pi-browser-harness](https://raw.githubusercontent.com/lr00rl/pi-browser-harness/main/assets/hero.png)
 
 **Browser control for [pi](https://github.com/badlogic/pi-mono) agents, in the Chrome you're already using.**
 
@@ -22,7 +22,7 @@ no MCP hop, no second browser, no extra API keys.
 | **Transport** | Native pi extension, in-process | MCP / JSON-RPC round trip | MCP / JSON-RPC round trip | In-process + its own LLM calls |
 | **Extra credentials** | None | None | None | Its own model API key |
 | **Concurrency** | Reads run in parallel; mutations auto-serialize through a shared mutex | Sequential | Sequential | Sequential |
-| **Isolation** | Dedicated Chrome window per session; refuses tabs it didn't open | N/A (own browser) | N/A | N/A |
+| **Isolation** | Dedicated Chrome window by default; existing tabs require explicit approval | N/A (own browser) | N/A | N/A |
 | **Terminal output** | Inline screenshots and `Ctrl+O`-expandable tool results | Plain text | Plain text | Plain text |
 | **Escape hatch** | `browser_run_script` — raw CDP + full Node in one call | — | — | — |
 
@@ -145,7 +145,7 @@ Both run in isolated tabs and never disturb your current page.
 | `browser_new_tab` / `browser_open_urls` | Open one tab, or many URLs in parallel. |
 | `browser_go_back` / `browser_go_forward` / `browser_reload` | History. |
 | `browser_list_tabs` / `browser_current_tab` | List tabs (`scope:"owned"` by default) and inspect the attached one. |
-| `browser_switch_tab` / `browser_close_tab` | Switch or close — owned tabs only. |
+| `browser_switch_tab` / `browser_close_tab` | Switch owned tabs, or borrow an existing tab with `allowUnowned:true`; close owned tabs only. |
 
 ### Waiting and dialogs
 
@@ -225,7 +225,7 @@ browser_execute_js({ expression: `JSON.stringify(
 )` })
 
 // Skip the browser entirely for a JSON endpoint
-browser_http_get({ url: "https://api.github.com/repos/amankumarsingh77/pi-browser-harness" })
+browser_http_get({ url: "https://api.github.com/repos/lr00rl/pi-browser-harness" })
 ```
 
 ### Debug a failing page
@@ -319,10 +319,13 @@ shared async mutex and FIFO-queue automatically, so emitting several in one turn
 browser_snapshot() + browser_network_requests({ sinceMs: 5000 }) + browser_http_get({ url: "..." })
 ```
 
-**Tab ownership.** On first attach the harness opens a dedicated Chrome window and only operates
-inside it. `browser_list_tabs` defaults to `scope:"owned"` (pass `scope:"all"` for a read-only view
-of your other tabs); `browser_switch_tab` and `browser_close_tab` refuse anything this session
-didn't open. Owned tabs are closed at session shutdown, so nothing stale accumulates in your browser.
+**Tab ownership.** On first attach the harness opens a dedicated Chrome window. `browser_list_tabs`
+defaults to `scope:"owned"` (pass `scope:"all"` to inspect other tabs); `browser_switch_tab` accepts
+an existing tab only when you pass its full target ID with `allowUnowned:true` and approve the
+interactive confirmation. Borrowed tabs remain outside the ownership registry, are never closed by
+this extension, and are not decorated. Owned tabs are closed at session shutdown, so nothing stale
+accumulates in your browser. `browser_run_script` is a raw CDP escape hatch and can bypass these
+browser-tool ownership checks, so use it only for scripts the user explicitly requested.
 
 ---
 

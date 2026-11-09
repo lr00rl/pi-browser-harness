@@ -49,6 +49,17 @@ describe("browser_set_headers", () => {
     assert.equal(fake.callsTo("Network.setExtraHTTPHeaders").length, 0);
   });
 
+  test("allows a borrowed current tab after its switch approval", async () => {
+    const fake = await createFakeClient();
+    fake.ownership.remove("t1");
+    fake.ownership.borrow("t1");
+
+    const result = await setHeadersTool.handler({ headers: { "x-test": "value" } }, handlerContext(fake.client));
+
+    assert.equal(result.success, true);
+    assert.equal(fake.callsTo("Network.setExtraHTTPHeaders").length, 1);
+  });
+
   test("schema rejects empty or malformed header sets", () => {
     const validate = Compile(setHeadersTool.parameters);
     assert.equal(validate.Check({ headers: {} }), false);

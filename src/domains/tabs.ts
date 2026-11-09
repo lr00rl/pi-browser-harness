@@ -4,6 +4,25 @@ import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCallBrowser, fromClient } from "./cdp-call";
 import { resolveOwnedTargetId } from "./tab-resolve";
 
+const BORROW_APPROVAL_TIMEOUT_MS = 60_000;
+const BORROW_BLOCKED_SCHEMES = [
+  "about:",
+  "chrome:",
+  "chrome-extension:",
+  "chrome-untrusted:",
+  "devtools:",
+  "view-source:",
+];
+
+const isBorrowableUrl = (url: string): boolean => {
+  const normalized = url.trim().toLowerCase();
+  return normalized === "about:blank" || !BORROW_BLOCKED_SCHEMES.some((scheme) => normalized.startsWith(scheme));
+};
+
+const confirmationText = (title: string, url: string): string =>
+  `URL: ${url}\nTitle (page-controlled): ${title.replace(/\s+/g, " ").trim().slice(0, 120)}\n\n` +
+  "Pi will be able to read and modify this tab for the current session, but it will not close it.";
+
 const ListTabsArgs = Type.Object({
   includeInternal: Type.Optional(Type.Boolean({ default: true, description: "Include chrome:// pages" })),
   scope: Type.Optional(
@@ -67,28 +86,97 @@ export const currentTabTool = defineBrowserTool({
 
 const SwitchTabArgs = Type.Object({
   targetId: Type.String({ description: "Target ID from browser_list_tabs" }),
+  allowUnowned: Type.Optional(
+    Type.Boolean({
+      default: false,
+      description: "Request access to an existing user tab. Requires explicit user approval.",
+    }),
+  ),
 });
 
 export const switchTabTool = defineBrowserTool({
   name: "browser_switch_tab",
   label: "Browser Switch Tab",
-  description: "Switch to and attach to a different tab by targetId. Only tabs this harness session opened are accepted.",
+  description: "Switch to an owned tab, or explicitly borrow an existing tab after user approval.",
   promptSnippet: "Switch tabs",
   promptGuidelines: [
     "Get a targetId via browser_list_tabs first.",
-    "Accepts exact targetId or a unique prefix (>=8 hex characters) of an owned tab.",
+    "Owned tabs accept an exact targetId or a unique prefix (>=8 hex characters).",
+    "To control an existing user tab, pass its exact targetId with allowUnowned:true.",
+    "Borrowed tabs are never added to ownership and must not be closed by the harness.",
   ],
   parameters: SwitchTabArgs,
   concurrency: "serialized",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const target = resolveOwnedTargetId(client, args.targetId);
-    if (!target.success) return target;
-    const resolved = target.data;
+  async handler(args, { client, extensionCtx, signal }): Promise<Result<ToolOk, ToolErr>> {
+    let resolved: string;
+    let borrowed = false;
+    const owned = resolveOwnedTargetId(client, args.targetId);
+
+    if (owned.success) {
+      resolved = owned.data;
+    } else if (args.allowUnowned === true) {
+      const tabs = fromClient(await client.listTabs(true), "Target.getTargets");
+      if (!tabs.success) return tabs;
+      const tab = tabs.data.find((candidate) => candidate.targetId === args.targetId);
+      if (!tab) {
+        return err({
+          kind: "invalid_args",
+          message: "Target tab not found. List tabs again and use its full targetId.",
+          details: { targetId: args.targetId },
+        });
+      }
+      if (!isBorrowableUrl(tab.url)) {
+        return err({
+          kind: "invalid_state",
+          message: `Refusing to borrow a privileged Chrome page: ${tab.url}`,
+          details: { targetId: args.targetId, url: tab.url },
+        });
+      }
+      if (!extensionCtx.hasUI) {
+        return err({
+          kind: "invalid_state",
+          message: "Borrowing an existing tab requires interactive user approval.",
+          details: { targetId: args.targetId },
+        });
+      }
+      if (signal?.aborted) {
+        return err({
+          kind: "invalid_state",
+          message: "Borrowing the tab was aborted before approval.",
+          details: { targetId: args.targetId },
+        });
+      }
+      const approved = await extensionCtx.ui.confirm(
+        "Allow control of existing Chrome tab?",
+        confirmationText(tab.title, tab.url),
+        { timeout: BORROW_APPROVAL_TIMEOUT_MS, ...(signal === undefined ? {} : { signal }) },
+      );
+      if (!approved) {
+        return err({
+          kind: "invalid_state",
+          message: "User declined access to this tab.",
+          details: { targetId: args.targetId },
+        });
+      }
+      if (signal?.aborted) {
+        return err({
+          kind: "invalid_state",
+          message: "Borrowing the tab was aborted after approval.",
+          details: { targetId: args.targetId },
+        });
+      }
+      resolved = tab.targetId;
+      borrowed = true;
+    } else {
+      return owned;
+    }
+
     const r = fromClient(await client.switchTab(resolved), "Target.attachToTarget");
     if (!r.success) return r;
+    if (borrowed) client.ownership().borrow(resolved);
     const note = resolved === args.targetId ? "" : ` (resolved from prefix "${args.targetId}")`;
     return ok({
-      text: `Switched to ${resolved}${note}`,
+      text: `Switched to ${resolved}${note}${borrowed ? " (borrowed; not owned)" : ""}`,
       details: { targetId: resolved },
     });
   },

@@ -310,7 +310,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
         targetId: t.targetId,
         title: t.title,
         url: t.url,
-        owned: ownership.has(t.targetId),
+        owned: ownership.has(t.targetId) && !ownership.isBorrowed(t.targetId),
       }));
     const live = new Set(tabs.map((t) => t.targetId));
     reconcileOwnership(ownership, live);
@@ -323,9 +323,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   const switchTab = async (targetId: string): Promise<Result<void, CdpError>> => {
     const r = await session.switchTo(targetId);
     if (!r.success) return r;
-    await session.call("Runtime.evaluate", {
-      expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
-    });
+    // Only decorate tabs created by the harness. Borrowed user tabs must not be modified just by attaching.
+    if (ownership.has(targetId)) {
+      await session.call("Runtime.evaluate", {
+        expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
+      });
+    }
     return ok(undefined);
   };
 
@@ -388,6 +391,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   const closeOwnedTabs = async (): Promise<void> => {
     for (const id of ownership.list()) {
+      if (ownership.isBorrowed(id)) continue;
       const closed = await session.callBrowser("Target.closeTarget", { targetId: id });
       // A remote error means the browser answered (typically "no target with given id"): the tab is gone either way. A transport failure means nothing was closed, so keep the record for the next attempt.
       if (closed.success || closed.error.kind === "remote_error") ownership.remove(id);

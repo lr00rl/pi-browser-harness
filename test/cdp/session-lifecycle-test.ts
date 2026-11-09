@@ -40,6 +40,16 @@ const detachesFor = (stub: { calls: ReadonlyArray<{ method: string; params: Reco
   stub.calls.filter((c) => c.method === "Target.detachFromTarget").map((c) => c.params["sessionId"]);
 
 describe("CdpSession re-attach", () => {
+  test("borrowed tabs are not adopted when reconnecting the harness window", async () => {
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"] });
+    ownership.borrow("t2");
+    const { session } = await attached(TWO_PAGES, ownership);
+
+    assert.equal(ownership.has("t2"), false);
+    await session.attachFirstPage();
+    assert.equal(ownership.has("t2"), false);
+  });
+
   test("re-attaching the same target detaches the old session only after the new one is live", async () => {
     const { stub, session } = await attached(TWO_PAGES, createOwnershipRegistry({ ownedTargetIds: ["t1"] }));
     const again = await session.attachFirstPage();

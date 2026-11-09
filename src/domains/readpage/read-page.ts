@@ -1,5 +1,6 @@
 import { borrowSession } from "../../cdp/target-factory";
 import { Type } from "typebox";
+import { controlsTarget } from "../tab-resolve";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
@@ -27,7 +28,7 @@ const LOAD_TIMEOUT_MS = 15_000;
 const ReadPageArgs = Type.Object({
   url: Type.Optional(Type.String({ description: "URL to open in an isolated tab, read, then close." })),
   targetId: Type.Optional(
-    Type.String({ description: "Read an already-open tab this session owns instead of opening a URL." }),
+    Type.String({ description: "Read an already-open tab this session controls instead of opening a URL." }),
   ),
 });
 
@@ -73,7 +74,7 @@ export type CaptureFromPage = Pinned<captured.PageCapture>;
 // Built once: stringifying the page function per call was the only cost of the thunk.
 const PAGE_CAPTURE_EXPR = pageCallExpression(capturePage, BODY_TEXT_LIMIT);
 
-// Accepts the capture either as JSON text (isolated tab) or as the already-decoded value (owned tab).
+// Accepts the capture either as JSON text (isolated tab) or as the already-decoded value (controlled tab).
 export const toPageCapture = (raw: unknown): PageCapture | undefined => {
   if (typeof raw === "string") {
     const parsed = parseJson(raw, pageCaptureValidator);
@@ -130,8 +131,8 @@ const readOwnedTab = async (
   client: BrowserClient,
   targetId: string,
 ): Promise<Result<ToolOk<ReadPageDetails>, ToolErr>> => {
-  if (!client.owns(targetId)) {
-    return err({ kind: "invalid_state", message: `Tab ${targetId} is not owned by this session.` });
+  if (!controlsTarget(client, targetId)) {
+    return err({ kind: "invalid_state", message: `Tab ${targetId} is not owned or borrowed by this session.` });
   }
   const borrowed = await borrowSession(client, targetId);
   if (!borrowed.success) return fromClient(borrowed, "Target.attachToTarget");
@@ -148,7 +149,7 @@ export const readPageTool = defineBrowserTool({
   name: "browser_read_page",
   label: "Browser Read Page",
   description:
-    "Read a page as clean article text — main content with nav/ads/boilerplate stripped. Pass a url (opened in an isolated tab, read, then closed) or a targetId of an owned tab. Reader-mode counterpart to browser_web_search.",
+    "Read a page as clean article text — main content with nav/ads/boilerplate stripped. Pass a url (opened in an isolated tab, read, then closed) or a targetId of a controlled tab. Reader-mode counterpart to browser_web_search.",
   promptSnippet: "Read a page's main content as clean text",
   promptGuidelines: [
     "Returns readable main-article text — use this over browser_snapshot/browser_execute_js when you want an article's content for reading or research.",

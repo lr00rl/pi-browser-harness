@@ -16,7 +16,7 @@ cd pi-browser-harness
 If you are working directly from the upstream repository:
 
 ```bash
-git clone https://github.com/amankumarsingh77/pi-browser-harness.git
+git clone https://github.com/lr00rl/pi-browser-harness.git
 cd pi-browser-harness
 ```
 

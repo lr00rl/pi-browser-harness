@@ -367,11 +367,12 @@ export const createCdpSession = (
         allPages.map((p) => (p.targetId === anchorId ? Promise.resolve(anchorWin) : windowId(p.targetId))),
       );
       // One replaceAll, one change notification: adding per page would persist state once per tab.
-      const adopted = allPages.filter((_, i) => {
+      const adopted = allPages.filter((p, i) => {
         const r = windows[i];
-        return r?.success === true && r.data === anchorWindowId;
+        return !registry.isBorrowed(p.targetId) && r?.success === true && r.data === anchorWindowId;
       }).map((p) => p.targetId);
-      registry.replaceAll([...new Set([...registry.list(), ...adopted])]);
+      const retained = registry.list().filter((id) => !registry.isBorrowed(id));
+      registry.replaceAll([...new Set([...retained, ...adopted])]);
     }
     if (!registry.harnessWindow()) registry.setHarnessWindow(anchorId);
   };

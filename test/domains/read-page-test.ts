@@ -192,13 +192,25 @@ describe("browser_read_page by targetId", () => {
     const r = await readPageTool.handler({ targetId: "zz" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
-    assert.equal(r.error.message, "Tab zz is not owned by this session.");
+    assert.equal(r.error.message, "Tab zz is not owned or borrowed by this session.");
     assert.equal(fake.calls.length, 0);
   });
 
   test("the current tab's tracked session is reused without attaching", async () => {
     const fake = await createFakeClient({ evaluate: () => ok(CAPTURE) });
     const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(fake.callsTo("Target.attachToTarget").length, 0);
+    assert.equal(fake.callsTo("Target.detachFromTarget").length, 0);
+  });
+
+  test("a borrowed tab can be read after explicit approval", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(CAPTURE) });
+    fake.ownership.remove("t1");
+    fake.ownership.borrow("t1");
+
+    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+
     assert.equal(r.success, true);
     assert.equal(fake.callsTo("Target.attachToTarget").length, 0);
     assert.equal(fake.callsTo("Target.detachFromTarget").length, 0);

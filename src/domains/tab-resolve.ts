@@ -8,6 +8,9 @@ export const ownershipDeniedMessage = (id: string, namespace: string): string =>
   `Tab ${id} is not owned by this harness session (namespace: ${namespace}). ` +
   `Use browser_list_tabs with scope:'all' to see it, or browser_new_tab to open one this session can control.`;
 
+export const controlsTarget = (client: BrowserClient, targetId: string): boolean =>
+  client.owns(targetId) || client.ownership().isBorrowed(targetId);
+
 // Resolves a user-supplied target id against the tabs this session owns, and only those:
 //   - an exact owned id resolves to itself;
 //   - a hex prefix of 8+ characters resolves when it matches exactly one owned tab;
