@@ -103,7 +103,7 @@ describe("ensureHarnessWindow", () => {
     );
     const r = await ensureHarnessWindow(h.client);
     assert.deepEqual(r, ok({ targetId: "fresh", freshlyCreated: true }));
-    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", newWindow: true }]);
+    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", newWindow: true, background: true }]);
     assert.equal(h.fake.ownership.harnessWindow(), "fresh");
     assert.equal(h.fake.ownership.has("fresh"), true);
     assert.equal(h.fake.ownership.harnessWindowId(), 42);
@@ -234,20 +234,43 @@ describe("ensureHarnessWindow", () => {
 });
 
 describe("openHarnessTab", () => {
-  test("without a profile context, creates a target with the opener and takes ownership", async () => {
-    const h = await harness({ "Target.createTarget": ok({ targetId: "child" }) });
-    const r = await openHarnessTab(h.client, "t1");
+  // Target.createTarget has no opener or window parameter (it lands in the last activated window, usually the
+  // user's), so even without a pinned profile the tab is opened by window.open in the harness window.
+  test("without a profile context, opens the tab via window.open in the opener's window and takes ownership", async () => {
+    const fake = await createFakeClient({ spawnTabs: ["child"] });
+    const r = await openHarnessTab(fake.client, "t1");
     assert.deepEqual(r, ok("child"));
-    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", openerId: "t1" }]);
-    assert.equal(h.fake.ownership.has("child"), true);
-    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 0);
+    assert.equal(createCalls(fake).length, 0, "no createTarget: it would land in the user's window");
+    const evaluate = fake.callsTo("Runtime.evaluate")[0];
+    assert.ok(evaluate, "window.open was evaluated");
+    assert.equal(evaluate.sessionId, "s1");
+    assert.equal(evaluate.params["userGesture"], true);
+    assert.equal(fake.ownership.has("child"), true);
   });
 
-  test("without a profile context, a createTarget failure is returned and nothing is owned", async () => {
-    const h = await harness({ "Target.createTarget": err(cdpError("remote_error", "nope")) });
-    const r = await openHarnessTab(h.client, "t1");
+  test("without a profile context, a blocked window.open falls back to a background window of its own", async () => {
+    const fake = await createFakeClient({ spawnTabs: [null], canned: { "Target.createTarget": ok({ targetId: "own-window" }) } });
+    const r = await openHarnessTab(fake.client, "t1");
+    assert.deepEqual(r, ok("own-window"));
+    assert.deepEqual(createCalls(fake).map((c) => c.params), [{ url: "about:blank", newWindow: true, background: true }]);
+    assert.equal(fake.ownership.has("own-window"), true);
+  });
+
+  test("with a pin whose context is not resolved yet, a blocked window.open does not fall back to the default profile", async () => {
+    const fake = await createFakeClient({ spawnTabs: [null], canned: { "Target.createTarget": ok({ targetId: "wrong-profile" }) } });
+    const client: BrowserClient = { ...fake.client, profilePin: () => pin };
+    const r = await openHarnessTab(client, "t1");
     assert.equal(r.success, false);
-    assert.deepEqual(h.fake.ownership.list(), ["t1"]);
+    assert.equal(createCalls(fake).length, 0, "createTarget would open the tab in the default profile, the wrong account");
+    assert.deepEqual(fake.ownership.list(), ["t1"]);
+  });
+
+  test("without a profile context, a failed fallback reports the window.open refusal and owns nothing", async () => {
+    const fake = await createFakeClient({ spawnTabs: [null], canned: { "Target.createTarget": err(cdpError("remote_error", "nope")) } });
+    const r = await openHarnessTab(fake.client, "t1");
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /blocked window\.open in the harness window/);
+    assert.deepEqual(fake.ownership.list(), ["t1"]);
   });
 
   // With a context pinned, the tab is opened by `window.open` inside the opener and found again by
@@ -320,6 +343,7 @@ describe("openHarnessTab", () => {
     assert.equal(r.error.kind, "invalid_response");
     assert.match(r.error.message, /blocked window\.open/);
     assert.equal(h.fake.callsTo("Target.getTargets").length, 0, "no polling after a refusal");
+    assert.equal(createCalls(h.fake).length, 0, "pinned, there is no createTarget fallback: it would open in the wrong profile");
     assert.deepEqual(h.fake.ownership.list(), ["t1"]);
   });
 

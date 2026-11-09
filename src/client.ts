@@ -321,10 +321,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const switchTab = async (targetId: string): Promise<Result<void, CdpError>> => {
-    const r = await session.switchTo(targetId);
+    const owned = ownership.has(targetId);
+    // An owned tab is selected inside the harness window so it renders; a borrowed tab is attached without selecting it.
+    const r = await session.switchTo(targetId, { activate: owned });
     if (!r.success) return r;
     // Only decorate tabs created by the harness. Borrowed user tabs must not be modified just by attaching.
-    if (ownership.has(targetId)) {
+    if (owned) {
       await session.call("Runtime.evaluate", {
         expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
       });

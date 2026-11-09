@@ -21,17 +21,17 @@ const CAPTURE: PageCapture = {
   bodyText: "fallback body",
 };
 
-// The fake attaches t1 as s1; the isolated tab t2 receives the second attach result.
-const reading = (canned: Canned = {}, readyState = true): Promise<FakeClient> =>
+// The fake attaches t1 as s1; the isolated tab t2 is opened by window.open in t1 and receives the second attach result.
+const reading = (canned: Canned = {}, readyState = true, spawnTabs: ReadonlyArray<string | null> = ["t2"]): Promise<FakeClient> =>
   createFakeClient({
     canned: {
-      "Target.createTarget": ok({ targetId: "t2" }),
       "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
       "Page.navigate": ok({ frameId: "f" }),
       "Runtime.evaluate": evaluated(JSON.stringify(CAPTURE)),
       ...canned,
     },
     evaluate: (expression) => ok(expression.includes("readyState") ? readyState : undefined),
+    spawnTabs,
   });
 
 const details = (d: ReadPageDetails | undefined): ReadPageDetails => {
@@ -60,7 +60,8 @@ describe("browser_read_page by url", () => {
     assert.equal(r.success, true);
     assert.deepEqual(fake.calls.map((c) => [c.method, c.sessionId]), [
       ["Target.getTargets", null],
-      ["Target.createTarget", null],
+      ["Runtime.evaluate", "s1"],
+      ["Target.getTargets", null],
       ["Target.attachToTarget", null],
       ["Page.enable", "s-iso"],
       ["Page.navigate", "s-iso"],
@@ -69,7 +70,7 @@ describe("browser_read_page by url", () => {
     assert.equal(fake.callsTo("Page.navigate")[0]?.params["url"], "https://example.test/article");
     assert.deepEqual(closed, ["t2"]);
     assert.ok(fake.evaluated[0]?.includes("readyState"), "the load poll ran on the isolated tab");
-    const expr = fake.callsTo("Runtime.evaluate")[0]?.params["expression"];
+    const expr = fake.callsTo("Runtime.evaluate").find((c) => c.sessionId === "s-iso")?.params["expression"];
     assert.equal(typeof expr, "string");
     assert.match(String(expr), /^\(function capturePage\(/);
 
@@ -105,14 +106,13 @@ describe("browser_read_page by url", () => {
     assert.equal(r.error.kind, "cdp_error");
     assert.deepEqual(r.error.details, { method: "Page.navigate" });
     assert.deepEqual(closed, ["t2"]);
-    assert.equal(fake.callsTo("Runtime.evaluate").length, 0);
+    assert.equal(fake.callsTo("Runtime.evaluate").filter((c) => c.sessionId === "s-iso").length, 0);
   });
 
   test("a load that is aborted is a timeout and the tab is still closed", async () => {
     const ac = new AbortController();
     const fake = await createFakeClient({
       canned: {
-        "Target.createTarget": ok({ targetId: "t2" }),
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
         "Page.navigate": ok({ frameId: "f" }),
       },
@@ -120,6 +120,7 @@ describe("browser_read_page by url", () => {
         ac.abort();
         return ok(false);
       },
+      spawnTabs: ["t2"],
     });
     const { client, closed } = closing(fake);
     const r = await readPageTool.handler({ url: "https://example.test/x" }, handlerContext(client, ac.signal));
@@ -150,11 +151,11 @@ describe("browser_read_page by url", () => {
   });
 
   test("when the isolated tab cannot be opened nothing is closed", async () => {
-    const fake = await reading({ "Target.createTarget": err(cdpError("remote_error", "blocked")) });
+    const fake = await reading({ "Target.createTarget": err(cdpError("remote_error", "too many windows")) }, true, [null]);
     const { client, closed } = closing(fake);
     const r = await readPageTool.handler({ url: "https://example.test/x" }, handlerContext(client));
     assert.equal(r.success, false);
-    assert.deepEqual(r.error.details, { method: "Target.createTarget" });
+    assert.match(r.error.message, /blocked window\.open/);
     assert.deepEqual(closed, []);
   });
 });
@@ -257,7 +258,7 @@ describe("browser_read_page by targetId", () => {
     const fake = await reading();
     const r = await readPageTool.handler({ url: "https://example.test/article", targetId: "t1" }, handlerContext(fake.client));
     assert.equal(r.success, true);
-    assert.equal(fake.callsTo("Target.createTarget").length, 1);
+    assert.equal(fake.callsTo("Runtime.evaluate").filter((c) => String(c.params["expression"]).includes("window.open")).length, 1);
   });
 });
 

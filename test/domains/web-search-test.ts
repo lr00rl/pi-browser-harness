@@ -21,16 +21,17 @@ const EXTRACTION: SerpExtraction = {
   pageText: "results",
 };
 
-const searching = (canned: Canned = {}): Promise<FakeClient> =>
+// The isolated tab t2 is opened by window.open in the harness tab t1 and receives the second attach result.
+const searching = (canned: Canned = {}, spawnTabs: ReadonlyArray<string | null> = ["t2"]): Promise<FakeClient> =>
   createFakeClient({
     canned: {
-      "Target.createTarget": ok({ targetId: "t2" }),
       "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
       "Page.navigate": ok({ frameId: "f" }),
       "Runtime.evaluate": evaluated(JSON.stringify(EXTRACTION)),
       ...canned,
     },
     evaluate: (expression) => ok(expression.includes("readyState") ? true : undefined),
+    spawnTabs,
   });
 
 const render = renderWith(webSearchTool);
@@ -54,7 +55,8 @@ describe("browser_web_search", () => {
     assert.equal(r.success, true);
     assert.deepEqual(fake.calls.map((c) => [c.method, c.sessionId]), [
       ["Target.getTargets", null],
-      ["Target.createTarget", null],
+      ["Runtime.evaluate", "s1"],
+      ["Target.getTargets", null],
       ["Target.attachToTarget", null],
       ["Page.enable", "s-iso"],
       ["Page.navigate", "s-iso"],
@@ -64,7 +66,7 @@ describe("browser_web_search", () => {
       fake.callsTo("Page.navigate")[0]?.params["url"],
       "https://www.google.com/search?q=pi%20browser%20harness&num=10&hl=en",
     );
-    assert.match(String(fake.callsTo("Runtime.evaluate")[0]?.params["expression"]), /^\(function extractSerp\(/);
+    assert.match(String(fake.callsTo("Runtime.evaluate").find((c) => c.sessionId === "s-iso")?.params["expression"]), /^\(function extractSerp\(/);
     assert.deepEqual(closed, ["t2"]);
 
     const results = [
@@ -232,7 +234,6 @@ describe("browser_web_search", () => {
     const ac = new AbortController();
     const fake = await createFakeClient({
       canned: {
-        "Target.createTarget": ok({ targetId: "t2" }),
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
         "Page.navigate": ok({ frameId: "f" }),
       },
@@ -240,21 +241,22 @@ describe("browser_web_search", () => {
         ac.abort();
         return ok(false);
       },
+      spawnTabs: ["t2"],
     });
     const { client, closed } = closing(fake);
     const r = await webSearchTool.handler({ query: "q" }, handlerContext(client, ac.signal));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "timeout");
     assert.deepEqual(closed, ["t2"]);
-    assert.equal(fake.callsTo("Runtime.evaluate").length, 0);
+    assert.equal(fake.callsTo("Runtime.evaluate").filter((c) => c.sessionId === "s-iso").length, 0);
   });
 
   test("when the isolated tab cannot be opened nothing is navigated or closed", async () => {
-    const fake = await searching({ "Target.createTarget": err(cdpError("remote_error", "blocked")) });
+    const fake = await searching({ "Target.createTarget": err(cdpError("remote_error", "too many windows")) }, [null]);
     const { client, closed } = closing(fake);
     const r = await webSearchTool.handler({ query: "q" }, handlerContext(client));
     assert.equal(r.success, false);
-    assert.deepEqual(r.error.details, { method: "Target.createTarget" });
+    assert.match(r.error.message, /blocked window\.open/);
     assert.deepEqual(closed, []);
     assert.equal(fake.callsTo("Page.navigate").length, 0);
   });
@@ -294,7 +296,7 @@ describe("browser_web_search fallback ladder", () => {
       "https://beta.test/search?q=q",
       "https://gamma.test/search?q=q",
     ]);
-    assert.equal(fake.callsTo("Target.createTarget").length, 1);
+    assert.equal(fake.callsTo("Runtime.evaluate").filter((c) => String(c.params["expression"]).includes("window.open")).length, 1, "one tab for the whole ladder");
     assert.deepEqual(closed, ["t2"]);
     assert.equal(details.engine, "gamma");
     assert.deepEqual(details.fallbacks, [
@@ -342,7 +344,7 @@ describe("browser_web_search fallback ladder", () => {
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_args");
     assert.equal(r.error.message, 'unknown search engine "altavista"; mounted engines: alpha, beta, gamma');
-    assert.equal(fake.callsTo("Target.createTarget").length, 0);
+    assert.equal(fake.callsTo("Runtime.evaluate").length, 0, "no tab is opened for an unknown engine");
   });
 
   test("when every engine fails it is all_engines_failed with each attempt", async () => {
@@ -369,7 +371,6 @@ describe("browser_web_search fallback ladder", () => {
     const ac = new AbortController();
     const fake = await createFakeClient({
       canned: {
-        "Target.createTarget": ok({ targetId: "t2" }),
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
         "Page.navigate": ok({ frameId: "f" }),
       },
@@ -377,6 +378,7 @@ describe("browser_web_search fallback ladder", () => {
         ac.abort();
         return ok(false);
       },
+      spawnTabs: ["t2"],
     });
     const r = await ladderTool.handler({ query: "q" }, handlerContext(fake.client, ac.signal));
     assert.equal(r.success, false);
@@ -388,7 +390,6 @@ describe("browser_web_search fallback ladder", () => {
     const polled: string[] = [];
     const fake = await createFakeClient({
       canned: {
-        "Target.createTarget": ok({ targetId: "t2" }),
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
         "Page.navigate": ok({ frameId: "f" }),
         "Runtime.evaluate": evaluated(JSON.stringify(HIT)),
@@ -397,6 +398,7 @@ describe("browser_web_search fallback ladder", () => {
         if (expression.includes("querySelector(")) polled.push(expression);
         return ok(expression.includes("readyState") || polled.length >= 2 ? true : false);
       },
+      spawnTabs: ["t2"],
     });
     const tool = createWebSearchTool({
       engines: createEngineRegistry().mount({ ...fakeEngine("js"), readySelector: "article.result" }),

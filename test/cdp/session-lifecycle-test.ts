@@ -39,6 +39,49 @@ const consoleEvent = (sessionId: string, text: string) => ({
 const detachesFor = (stub: { calls: ReadonlyArray<{ method: string; params: Record<string, unknown> }> }): unknown[] =>
   stub.calls.filter((c) => c.method === "Target.detachFromTarget").map((c) => c.params["sessionId"]);
 
+describe("CdpSession harness-window adoption", () => {
+  const WINDOW_MATES: Canned = {
+    ...TWO_PAGES,
+    "Target.getTargets": ok({
+      targetInfos: [
+        { targetId: "t1", type: "page", title: "Harness", url: "about:blank" },
+        { targetId: "popup", type: "page", title: "Popup", url: "https://popup.test/", openerId: "t1" },
+        { targetId: "grandchild", type: "page", title: "Child", url: "https://child.test/", openerId: "popup" },
+        { targetId: "stranger", type: "page", title: "Agent tab", url: "https://agent.test/" },
+        { targetId: "foreign-child", type: "page", title: "Agent child", url: "https://agent.test/2", openerId: "stranger" },
+      ],
+    }),
+  };
+
+  test("adopts window-mates opened by an owned tab, transitively, and leaves strangers alone", async () => {
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"] });
+    await attached(WINDOW_MATES, ownership);
+    assert.deepEqual([...ownership.list()].sort(), ["grandchild", "popup", "t1"]);
+    assert.equal(ownership.has("stranger"), false, "a tab another agent or the user put in the window is not adopted");
+    assert.equal(ownership.has("foreign-child"), false, "a stranger's own popups are not adopted either");
+  });
+
+  test("a tab already owned stays owned across a reattach even when Chrome reports no opener for it", async () => {
+    // A harness tab that navigated to a COOP page (or was opened noopener) loses its openerId; ownership was recorded
+    // when the harness opened it, so it is neither dropped nor left behind at shutdown.
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1", "stranger"] });
+    const { session } = await attached(WINDOW_MATES, ownership);
+    await session.attachFirstPage();
+    assert.equal(ownership.has("stranger"), true);
+  });
+
+  test("with nothing owned alive, a fresh harness window is created in the background", async () => {
+    const stub = createStubTransport({ ...TWO_PAGES, "Target.createTarget": ok({ targetId: "fresh" }) });
+    const session = createCdpSession(stub.transport, createOwnershipRegistry({ ownedTargetIds: ["gone"] }));
+    const first = await session.attachFirstPage();
+    assert.equal(first.success, true);
+    assert.deepEqual(
+      stub.calls.filter((c) => c.method === "Target.createTarget").map((c) => c.params),
+      [{ url: "about:blank", newWindow: true, background: true }],
+    );
+  });
+});
+
 describe("CdpSession re-attach", () => {
   test("borrowed tabs are not adopted when reconnecting the harness window", async () => {
     const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"] });

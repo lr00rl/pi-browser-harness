@@ -39,8 +39,27 @@ const DEFAULT_ATTACH: Canned = {
   "Browser.getWindowForTarget": ok({ windowId: 7 }),
 };
 
-export const createStubTransport = (canned: Canned = {}): StubTransport => {
+export type StubOptions = {
+  // Models a page opening a tab with `window.open("about:blank#pi-…")`, the only way Chrome puts a new tab in a
+  // chosen window: each such evaluation takes the next id (null = the browser blocked it), answers `true`, and from
+  // then on Target.getTargets lists the tab under the URL it was opened with.
+  readonly spawnTabs?: ReadonlyArray<string | null>;
+};
+
+const WINDOW_OPEN = /window\.open\("(about:blank#pi-[^"]+)"/;
+
+const withSpawned = (listing: CannedResult, spawned: ReadonlyArray<Record<string, unknown>>): CannedResult => {
+  if (!listing.success || spawned.length === 0) return listing;
+  const data = listing.data;
+  const infos: ReadonlyArray<unknown> =
+    typeof data === "object" && data !== null && "targetInfos" in data && Array.isArray(data.targetInfos) ? data.targetInfos : [];
+  return ok({ targetInfos: [...infos, ...spawned] });
+};
+
+export const createStubTransport = (canned: Canned = {}, opts: StubOptions = {}): StubTransport => {
   const calls: RecordedCall[] = [];
+  const spawnQueue = [...(opts.spawnTabs ?? [])];
+  const spawned: Array<Record<string, unknown>> = [];
   const queues = new Map<string, CannedResult[]>();
   for (const [method, value] of Object.entries(canned)) {
     // A single Result has `success`; a queue of them is an array and does not.
@@ -61,8 +80,18 @@ export const createStubTransport = (canned: Canned = {}): StubTransport => {
   const transport: CdpTransport = {
     connect: () => Promise.resolve(ok(undefined)),
     close: () => Promise.resolve(),
-    request: (method, params, opts) => {
-      calls.push({ method, params, sessionId: opts?.sessionId });
+    request: (method, params, reqOpts) => {
+      calls.push({ method, params, sessionId: reqOpts?.sessionId });
+      if (opts.spawnTabs !== undefined && method === "Runtime.evaluate") {
+        const url = WINDOW_OPEN.exec(String(params["expression"]))?.[1];
+        if (url !== undefined) {
+          const id = spawnQueue.shift();
+          if (id === undefined || id === null) return Promise.resolve(ok({ result: { type: "boolean", value: false } }));
+          spawned.push({ targetId: id, type: "page", title: "", url });
+          return Promise.resolve(ok({ result: { type: "boolean", value: true } }));
+        }
+      }
+      if (method === "Target.getTargets") return Promise.resolve(withSpawned(next(method), spawned));
       return Promise.resolve(next(method));
     },
     events: (): AsyncIterable<CdpEvent> => ({
@@ -100,6 +129,7 @@ export type FakeClientOptions = {
   readonly evaluate?: (expression: string, sessionId?: string) => Result<unknown, CdpError>;
   readonly refs?: ReadonlyArray<{ readonly ref: string; readonly backendId: number; readonly sig?: RefSignature }>;
   readonly ownedTargetIds?: ReadonlyArray<string>;
+  readonly spawnTabs?: StubOptions["spawnTabs"];
 };
 
 export type FakeClient = {
@@ -116,7 +146,10 @@ const notConfigured = <T>(what: string): Result<T, CdpError> =>
   err(cdpError("invalid_response", `fake client: ${what} was called but not configured`));
 
 export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<FakeClient> => {
-  const stub = createStubTransport({ ...DEFAULT_ATTACH, ...(opts.canned ?? {}) });
+  const stub = createStubTransport(
+    { ...DEFAULT_ATTACH, ...(opts.canned ?? {}) },
+    opts.spawnTabs !== undefined ? { spawnTabs: opts.spawnTabs } : {},
+  );
   const ownership = createOwnershipRegistry({ ownedTargetIds: opts.ownedTargetIds ?? ["t1"] });
   const session = createCdpSession(stub.transport, ownership);
   const mutex = createMutex();

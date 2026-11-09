@@ -134,16 +134,21 @@ describe("browser_open_urls", () => {
   const A = "https://example.test/a";
   const B = "https://example.test/b";
 
-  // t1 is the fake's attached tab and harness window; new tabs are its children and borrow throwaway sessions.
-  const opening = (canned: Canned = {}, evaluate?: (expression: string) => boolean): Promise<FakeClient> =>
+  // t1 is the fake's attached tab and harness window; new tabs are opened by window.open in it (so they land in that
+  // window) and borrow throwaway sessions.
+  const opening = (
+    canned: Canned = {},
+    evaluate?: (expression: string) => boolean,
+    spawnTabs: ReadonlyArray<string | null> = ["t2", "t3"],
+  ): Promise<FakeClient> =>
     createFakeClient({
       canned: {
-        "Target.createTarget": [ok({ targetId: "t2" }), ok({ targetId: "t3" })],
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" }), ok({ sessionId: "s3" })],
         "Page.navigate": ok({ frameId: "f" }),
         ...canned,
       },
       evaluate: (expression) => ok(evaluate ? evaluate(expression) : expression.includes("readyState") ? true : undefined),
+      spawnTabs,
     });
 
   const updates = (fake: FakeClient): { ctx: HandlerContext; seen: string[] } => {
@@ -157,10 +162,12 @@ describe("browser_open_urls", () => {
     const { ctx, seen } = updates(fake);
     const r = await openUrlsTool.handler({ urls: [A, B] }, ctx);
     assert.equal(r.success, true);
-    assert.deepEqual(fake.callsTo("Target.createTarget").map((c) => c.params), [
-      { url: "about:blank", openerId: "t1" },
-      { url: "about:blank", openerId: "t1" },
-    ]);
+    assert.equal(fake.callsTo("Target.createTarget").length, 0, "createTarget would land in the user's window");
+    assert.deepEqual(
+      fake.callsTo("Runtime.evaluate").filter((c) => String(c.params["expression"]).includes("window.open")).map((c) => c.sessionId),
+      ["s1", "s1"],
+      "both tabs are opened from the harness tab",
+    );
     assert.deepEqual(fake.callsTo("Target.attachToTarget").map((c) => c.params), [
       { targetId: "t2", flatten: true },
       { targetId: "t3", flatten: true },
@@ -208,15 +215,16 @@ describe("browser_open_urls", () => {
 
   test("a tab whose creation fails is listed as failed while the others still open", async () => {
     const fake = await opening({
-      "Target.createTarget": [ok({ targetId: "t2" }), err(cdpError("remote_error", "too many tabs"))],
+      "Target.createTarget": err(cdpError("remote_error", "too many windows")),
       "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" })],
-    });
+    }, undefined, ["t2", null]);
     const r = await openUrlsTool.handler({ urls: [A, B] }, handlerContext(fake.client));
     assert.equal(r.success, true);
-    assert.equal(r.data.text, `✅ 1/2 tabs opened:\n  [0] ${A} → t2\n❌ 1/2 failed:\n  ${B}: too many tabs`);
+    const blocked = "the browser blocked window.open in the harness window — the page may have navigated away; retry, or run /browser-profile to re-seed";
+    assert.equal(r.data.text, `✅ 1/2 tabs opened:\n  [0] ${A} → t2\n❌ 1/2 failed:\n  ${B}: ${blocked}`);
     assert.deepEqual(r.data.details?.["tabs"], [
       { url: A, targetId: "t2", ok: true },
-      { url: B, targetId: "", ok: false, error: "too many tabs" },
+      { url: B, targetId: "", ok: false, error: blocked },
     ]);
     assert.deepEqual(fake.callsTo("Target.activateTarget").map((c) => c.params), [{ targetId: "t2" }]);
   });
@@ -280,9 +288,10 @@ describe("browser_open_urls", () => {
 
   test("when the harness window is gone the first url seeds a fresh window and the rest are its children", async () => {
     const fake = await opening({
-      "Target.createTarget": [ok({ targetId: "w1" }), ok({ targetId: "t3" })],
-      "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "sw" }), ok({ sessionId: "s3" })],
-    });
+      "Target.createTarget": ok({ targetId: "w1" }),
+      // s-open is the throwaway session on w1 that runs window.open for the second url.
+      "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-open" }), ok({ sessionId: "sw" }), ok({ sessionId: "s3" })],
+    }, undefined, ["t3"]);
     // Chrome reports the harness tab closed; the session drops it from ownership and the harness window.
     fake.emit({ method: "Target.targetDestroyed", params: { targetId: "t1" } });
     await new Promise((resolve) => setImmediate(resolve));
@@ -290,9 +299,10 @@ describe("browser_open_urls", () => {
     const r = await openUrlsTool.handler({ urls: [A, B] }, handlerContext(fake.client));
     assert.equal(r.success, true);
     assert.deepEqual(fake.callsTo("Target.createTarget").map((c) => c.params), [
-      { url: "about:blank", newWindow: true },
-      { url: "about:blank", openerId: "w1" },
+      { url: "about:blank", newWindow: true, background: true },
     ]);
+    const opener = fake.callsTo("Runtime.evaluate").find((c) => String(c.params["expression"]).includes("window.open"));
+    assert.equal(opener?.sessionId, "s-open", "the second tab is opened from inside the fresh window");
     assert.deepEqual(r.data.details?.["tabs"], [{ url: A, targetId: "w1", ok: true }, { url: B, targetId: "t3", ok: true }]);
     assert.equal(fake.client.ownership().harnessWindow(), "w1");
   });

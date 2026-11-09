@@ -180,9 +180,9 @@ export const COMMANDS = {
     Type.Object({
       url: Type.String(),
       newWindow: Type.Optional(Type.Boolean()),
+      // Opens the target without activating its window or the browser app (Chrome shows it inactive).
       background: Type.Optional(Type.Boolean()),
-      windowId: Type.Optional(Type.Number()),
-      openerId: Type.Optional(Type.String()),
+      // Chrome has no window or opener parameter here; window.open from a page is how a tab joins a chosen window.
     }),
     Type.Object({ targetId: Type.String() }),
   ),

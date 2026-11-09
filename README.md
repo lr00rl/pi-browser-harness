@@ -22,7 +22,7 @@ no MCP hop, no second browser, no extra API keys.
 | **Transport** | Native pi extension, in-process | MCP / JSON-RPC round trip | MCP / JSON-RPC round trip | In-process + its own LLM calls |
 | **Extra credentials** | None | None | None | Its own model API key |
 | **Concurrency** | Reads run in parallel; mutations auto-serialize through a shared mutex | Sequential | Sequential | Sequential |
-| **Isolation** | Dedicated Chrome window by default; existing tabs require explicit approval | N/A (own browser) | N/A | N/A |
+| **Isolation** | Dedicated background Chrome window that never takes focus; existing tabs require explicit approval | N/A (own browser) | N/A | N/A |
 | **Terminal output** | Inline screenshots and `Ctrl+O`-expandable tool results | Plain text | Plain text | Plain text |
 | **Escape hatch** | `browser_run_script` — raw CDP + full Node in one call | — | — | — |
 
@@ -134,7 +134,7 @@ Both run in isolated tabs and never disturb your current page.
 | `browser_type` | Enter text into a field by `ref`/selector (replaces its value; `clear:false` appends) or into the focused element. Real input events, so autocomplete opens; returns the value read back. |
 | `browser_press_key` | Press a key with an optional modifier bitfield. |
 | `browser_dispatch_key` | Synthetic DOM `KeyboardEvent` on one element, for pages that ignore raw CDP keys. |
-| `browser_scroll` | Scroll by delta. W3C wheel convention: positive `deltaY` = down. |
+| `browser_scroll` | Scroll by delta. W3C wheel convention: positive `deltaY` = down. A hidden tab is scrolled from inside the page instead of being brought forward. |
 | `browser_drag_and_drop` | Drag between two coordinate pairs. |
 
 ### Navigation and tabs
@@ -318,6 +318,12 @@ shared async mutex and FIFO-queue automatically, so emitting several in one turn
 ```
 browser_snapshot() + browser_network_requests({ sinceMs: 5000 }) + browser_http_get({ url: "..." })
 ```
+
+**Staying out of your way.** The harness never takes macOS focus from the app you are working in. Its window is
+created in the background, new tabs are opened from inside that window (so they never land in one of your windows),
+no tool brings Chrome to the front, and a pinned profile's window is opened with `open -g`. Another agent driving the
+same Chrome (Claude in Chrome, Codex, a second pi session) keeps its own tabs: on reconnect the harness only adopts
+tabs that one of its own tabs opened, so a tab someone else put in its window is never closed by it.
 
 **Tab ownership.** On first attach the harness opens a dedicated Chrome window. `browser_list_tabs`
 defaults to `scope:"owned"` (pass `scope:"all"` to inspect other tabs); `browser_switch_tab` accepts

@@ -13,12 +13,13 @@ import { hitInfo } from "../../src/domains/page/click.page";
 import { liveValue } from "../../src/domains/page/live-value.page";
 import { capturePage } from "../../src/domains/page/read-page.page";
 import { extractSerp } from "../../src/domains/page/serp.page";
+import { scrollAtPoint } from "../../src/domains/page/scroll.page";
 import { google } from "../../src/domains/search/engines/google";
 import { asRecord } from "../../src/util/guards";
 import { callPage, materialise } from "./page-harness";
 
 const PAGE_DIR = join(import.meta.dirname, "..", "..", "src", "domains", "page");
-const EXPECTED_FUNCTIONS = ["prepareTyping", "readTypedValue", "hitInfo", "fillField", "focusElement", "selectOption", "setChecked", "liveValue", "capturePage", "extractSerp", "dispatchKeyEvent"];
+const EXPECTED_FUNCTIONS = ["prepareTyping", "readTypedValue", "hitInfo", "fillField", "focusElement", "selectOption", "setChecked", "liveValue", "capturePage", "extractSerp", "dispatchKeyEvent", "scrollAtPoint"];
 
 const pageModules = (): ReadonlyArray<string> => readdirSync(PAGE_DIR).filter((f) => f.endsWith(".page.ts"));
 
@@ -387,5 +388,58 @@ describe("hitInfo", () => {
 
   test("nothing under the point is not on target", () => {
     assert.deepEqual(callPage(hitInfo, node("A"), null), { onTarget: false, hit: "nothing" });
+  });
+});
+
+describe("scrollAtPoint", () => {
+  type Box = { tagName: string; parentElement: Box | null; scrollHeight: number; clientHeight: number; scrollWidth: number; clientWidth: number; overflowY: string; overflowX: string; scrolledBy?: unknown };
+  const box = (tagName: string, parent: Box | null, extra: Partial<Box> = {}): Box => {
+    const b: Box = {
+      tagName, parentElement: parent, scrollHeight: 100, clientHeight: 100, scrollWidth: 100, clientWidth: 100,
+      overflowY: "visible", overflowX: "visible", ...extra,
+    };
+    return Object.assign(b, { scrollBy: (o: unknown) => { b.scrolledBy = o; } });
+  };
+  const install = (hit: Box | null, body: Box, root: Box): { pageScrolledBy: () => unknown } => {
+    let pageScroll: unknown;
+    Object.assign(globalThis, {
+      document: {
+        body, documentElement: root,
+        scrollingElement: { scrollBy: (o: unknown) => { pageScroll = o; } },
+        elementFromPoint: () => hit,
+      },
+      getComputedStyle: (el: Box) => ({ overflowY: el.overflowY, overflowX: el.overflowX }),
+      window: { scrollX: 0, scrollY: 640 },
+    });
+    return { pageScrolledBy: () => pageScroll };
+  };
+
+  test("scrolls the nearest scrollable ancestor of the element under the point", () => {
+    const root = box("HTML", null);
+    const body = box("BODY", root);
+    const list = box("UL", body, { overflowY: "auto", scrollHeight: 900, clientHeight: 300 });
+    const item = box("LI", list);
+    install(item, body, root);
+    const r = callPage(scrollAtPoint, { x: 10, y: 20, dx: 0, dy: 150 });
+    assert.deepEqual(r, { scrolled: "element", scrollX: 0, scrollY: 640 });
+    assert.deepEqual(list.scrolledBy, { left: 0, top: 150, behavior: "instant" });
+  });
+
+  test("falls back to the page when nothing under the point can scroll that way", () => {
+    const root = box("HTML", null);
+    const body = box("BODY", root);
+    const wide = box("DIV", body, { overflowX: "auto", scrollWidth: 900, clientWidth: 300 });
+    const env = install(wide, body, root);
+    const r = callPage(scrollAtPoint, { x: 10, y: 20, dx: 0, dy: -200 });
+    assert.deepEqual(r, { scrolled: "page", scrollX: 0, scrollY: 640 });
+    assert.equal(wide.scrolledBy, undefined, "a horizontal scroller is not used for a vertical delta");
+    assert.deepEqual(env.pageScrolledBy(), { left: 0, top: -200, behavior: "instant" });
+  });
+
+  test("an empty point scrolls the page", () => {
+    const root = box("HTML", null);
+    const env = install(null, box("BODY", root), root);
+    assert.deepEqual(asRecord(callPage(scrollAtPoint, { x: 0, y: 0, dx: 5, dy: 0 }))?.["scrolled"], "page");
+    assert.deepEqual(env.pageScrolledBy(), { left: 5, top: 0, behavior: "instant" });
   });
 });

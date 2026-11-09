@@ -7,19 +7,32 @@ import type { BrowserClient } from "../../src/client";
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
 
-const scrollable = async (canned: Canned = {}, viewport?: { width: number; height: number }): Promise<{ fake: FakeClient; client: BrowserClient }> => {
-  const fake = await createFakeClient({ canned });
+type PageState = { readonly visibility?: string; readonly scrolled?: unknown };
+
+// The page answers the visibility probe and, when the fallback runs, the in-page scroll.
+const scrollable = async (
+  canned: Canned = {},
+  viewport?: { width: number; height: number },
+  page: PageState = {},
+): Promise<{ fake: FakeClient; client: BrowserClient }> => {
+  const fake = await createFakeClient({
+    canned,
+    evaluate: (expression) => ok(
+      expression === "document.visibilityState"
+        ? page.visibility ?? "visible"
+        : page.scrolled ?? { scrolled: "page", scrollX: 0, scrollY: 300 },
+    ),
+  });
   const client = withClient(fake.client, { pageInfo: alwaysPageInfo(pageInfoOf(viewport)) });
   return { fake, client };
 };
 
 describe("browser_scroll", () => {
-  test("defaults to a 300px downward wheel at the viewport centre, after focusing and positioning the mouse", async () => {
+  test("defaults to a 300px downward wheel at the viewport centre, after positioning the mouse, without bringing the tab forward", async () => {
     const { fake, client } = await scrollable();
     const r = await scrollTool.handler({}, handlerContext(client));
     assert.equal(r.success, true);
     assert.deepEqual(fake.calls.map((c) => [c.method, c.params]), [
-      ["Page.bringToFront", {}],
       ["Input.dispatchMouseEvent", { type: "mouseMoved", x: 500, y: 300, button: "none", buttons: 0 }],
       ["Input.dispatchMouseEvent", {
         type: "mouseWheel", x: 500, y: 300, deltaX: 0, deltaY: 300, button: "none", buttons: 0, pointerType: "mouse",
@@ -81,13 +94,29 @@ describe("browser_scroll", () => {
     assert.equal(fake.calls.length, 0);
   });
 
-  test("a bringToFront failure stops before any mouse event", async () => {
-    const { fake, client } = await scrollable({ "Page.bringToFront": err(cdpError("remote_error", "no page")) });
+  test("a hidden tab is scrolled from inside the page and receives no input events", async () => {
+    const { fake, client } = await scrollable({}, undefined, {
+      visibility: "hidden",
+      scrolled: { scrolled: "element", scrollX: 0, scrollY: 0 },
+    });
+    const r = await scrollTool.handler({ x: 40, y: 80, deltaY: 120 }, handlerContext(client));
+    assert.equal(r.success, true);
+    assert.equal(fake.calls.length, 0, "neither Page.bringToFront nor Input events are sent to a hidden tab");
+    const scroll = fake.evaluated.find((e) => e.includes("scrollBy"));
+    assert.ok(scroll, "the in-page scroll ran");
+    assert.match(scroll, /\{"x":40,"y":80,"dx":0,"dy":120\}/);
+    assert.equal(
+      r.data.text,
+      "Scrolled at (40, 80) by (0, 120) from inside the page (the tab is not visible); page is now at (0, 0)",
+    );
+    assert.deepEqual(r.data.details, { x: 40, y: 80, deltaX: 0, deltaY: 120, via: "script", scrolled: "element" });
+  });
+
+  test("an in-page scroll with an unexpected result shape is an internal error", async () => {
+    const { client } = await scrollable({}, undefined, { visibility: "hidden", scrolled: "nope" });
     const r = await scrollTool.handler({}, handlerContext(client));
     assert.equal(r.success, false);
-    assert.equal(r.error.kind, "cdp_error");
-    assert.deepEqual(r.error.details, { method: "Page.bringToFront" });
-    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 0);
+    assert.equal(r.error.kind, "internal");
   });
 
   test("a failed mouse move stops before the wheel event", async () => {
@@ -100,14 +129,24 @@ describe("browser_scroll", () => {
     assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 1);
   });
 
-  test("a wheel event timeout keeps the timeout kind", async () => {
+  test("a wheel event that times out falls back to scrolling from inside the page", async () => {
     const { fake, client } = await scrollable({
       "Input.dispatchMouseEvent": [ok({}), err(cdpError("timeout", "wheel hung"))],
     });
     const r = await scrollTool.handler({}, handlerContext(client));
-    assert.equal(r.success, false);
-    assert.equal(r.error.kind, "timeout");
-    assert.deepEqual(r.error.details, { method: "Input.dispatchMouseEvent" });
+    assert.equal(r.success, true);
     assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 2);
+    assert.match(r.data.text, /from inside the page \(the wheel event was not delivered in time and may still land\)/);
+    assert.equal(r.data.details?.["via"], "script");
+  });
+
+  test("a wheel failure other than a timeout is reported, not papered over", async () => {
+    const { fake, client } = await scrollable({
+      "Input.dispatchMouseEvent": [ok({}), err(cdpError("remote_error", "bad wheel"))],
+    });
+    const r = await scrollTool.handler({}, handlerContext(client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.message, "bad wheel");
+    assert.equal(fake.evaluated.some((e) => e.includes("scrollBy")), false);
   });
 });

@@ -14,16 +14,22 @@ const check = (cond: boolean, label: string): void => {
 
 type FakeTarget = { targetId: string; type: string; url: string; title: string; windowId: number; openerId?: string };
 
+// Mirrors real Chrome where it matters here: Target.createTarget has no opener parameter and, without newWindow, lands
+// in the user's window; only window.open from a page puts a tab in that page's window with an openerId.
+const USER_WINDOW = 1;
+
 const createMockTransport = (): CdpTransport & {
   seed: (t: FakeTarget) => void;
   targets: Map<string, FakeTarget>;
   closed: ReadonlyArray<string>;
+  openFrom: (openerId: string, url: string) => string;
 } => {
   const targets = new Map<string, FakeTarget>();
   const closed: string[] = [];
   let sessionSeq = 0;
   let targetSeq = 0;
   let windowSeq = 100;
+  const sessionTargets = new Map<string, string>();
 
   const listeners: Array<() => void> = [];
   let buffer: CdpEvent[] = [];
@@ -46,9 +52,19 @@ const createMockTransport = (): CdpTransport & {
     },
   };
 
+  // What a page's window.open does: a tab in the opener's window, reported with the opener's id.
+  const openFrom = (openerId: string, url: string): string => {
+    const id = `tgt-${++targetSeq}`;
+    const windowId = targets.get(openerId)?.windowId ?? ++windowSeq;
+    targets.set(id, { targetId: id, type: "page", url, title: "", windowId, openerId });
+    push({ method: "Target.targetCreated", params: { targetInfo: { targetId: id, type: "page", url, title: "", openerId } } });
+    return id;
+  };
+
   const request = async (
     method: string,
     params: Record<string, unknown>,
+    opts?: { sessionId?: string | null },
   ): Promise<Result<unknown, CdpError>> => {
     switch (method) {
       case "Target.setDiscoverTargets":
@@ -57,23 +73,24 @@ const createMockTransport = (): CdpTransport & {
       case "Target.activateTarget":
         return ok({});
       case "Target.getTargets":
-        return ok({ targetInfos: [...targets.values()].map((t) => ({ targetId: t.targetId, type: t.type, url: t.url, title: t.title })) });
+        return ok({ targetInfos: [...targets.values()].map((t) => ({ targetId: t.targetId, type: t.type, url: t.url, title: t.title, ...(t.openerId ? { openerId: t.openerId } : {}) })) });
       case "Browser.getWindowForTarget": {
         const t = targets.get(params["targetId"] as string);
         return ok({ windowId: t?.windowId ?? -1, bounds: {} });
       }
       case "Target.createTarget": {
         const id = `tgt-${++targetSeq}`;
-        const opener = params["openerId"] as string | undefined;
-        const newWindow = params["newWindow"] === true;
-        const windowId = newWindow || !opener ? ++windowSeq : (targets.get(opener)?.windowId ?? ++windowSeq);
-        const t: FakeTarget = { targetId: id, type: "page", url: (params["url"] as string) ?? "about:blank", title: "", windowId, ...(opener ? { openerId: opener } : {}) };
+        const windowId = params["newWindow"] === true ? ++windowSeq : USER_WINDOW;
+        const t: FakeTarget = { targetId: id, type: "page", url: (params["url"] as string) ?? "about:blank", title: "", windowId };
         targets.set(id, t);
-        push({ method: "Target.targetCreated", params: { targetInfo: { targetId: id, type: "page", url: t.url, openerId: opener } } });
+        push({ method: "Target.targetCreated", params: { targetInfo: { targetId: id, type: "page", url: t.url, title: "" } } });
         return ok({ targetId: id });
       }
-      case "Target.attachToTarget":
-        return ok({ sessionId: `sess-${++sessionSeq}` });
+      case "Target.attachToTarget": {
+        const sid = `sess-${++sessionSeq}`;
+        sessionTargets.set(sid, params["targetId"] as string);
+        return ok({ sessionId: sid });
+      }
       case "Target.detachFromTarget":
         return ok({});
       case "Target.closeTarget": {
@@ -81,8 +98,15 @@ const createMockTransport = (): CdpTransport & {
         if (targets.delete(id)) { closed.push(id); push({ method: "Target.targetDestroyed", params: { targetId: id } }); }
         return ok({});
       }
-      case "Runtime.evaluate":
+      case "Runtime.evaluate": {
+        const opened = /window\.open\("([^"]+)"/.exec(String(params["expression"]));
+        const opener = opts?.sessionId ? sessionTargets.get(opts.sessionId) : undefined;
+        if (opened?.[1] !== undefined && opener !== undefined) {
+          openFrom(opener, opened[1]);
+          return ok({ result: { type: "boolean", value: true } });
+        }
         return ok({ result: { value: "complete" } });
+      }
       case "Page.navigate":
         return ok({ frameId: "f1" });
       default:
@@ -98,6 +122,7 @@ const createMockTransport = (): CdpTransport & {
     state: () => "open",
     onClose: (cb) => { listeners.push(cb); return () => {}; },
     seed: (t) => targets.set(t.targetId, t),
+    openFrom,
     targets,
     get closed() { return closed; },
   };
@@ -132,7 +157,7 @@ async function main(): Promise<void> {
     check(first.success, "newTab succeeds");
     if (first.success) {
       const t = transport.targets.get(first.data)!;
-      check(t.windowId === wid, "new tab lands in the harness window (via openerId)");
+      check(t.windowId === wid, "new tab lands in the harness window (via window.open)");
       check(client.owns(first.data), "new tab is owned");
     }
   }
@@ -143,13 +168,10 @@ async function main(): Promise<void> {
     await client.start();
     const cur = client.current()!;
 
-    const child = await client.session().callBrowser("Target.createTarget", { url: "https://child.test", openerId: cur.targetId });
+    const childId = transport.openFrom(cur.targetId, "https://child.test");
     await tick();
-    check(child.success, "owned page opens a child target");
-    if (child.success) {
-      const id = (child.data as { targetId: string }).targetId;
-      check(client.owns(id), "child target opened by an owned tab is auto-adopted");
-    }
+    check(transport.targets.has(childId), "owned page opens a child target");
+    check(client.owns(childId), "child target opened by an owned tab is auto-adopted");
 
     const stranger = await client.session().callBrowser("Target.createTarget", { url: "https://user.test", newWindow: true });
     await tick();
@@ -164,6 +186,7 @@ async function main(): Promise<void> {
     transport.seed({ targetId: "own-1", type: "page", url: "https://a.test", title: "", windowId: 500 });
     transport.seed({ targetId: "sib-2", type: "page", url: "https://b.test", title: "", windowId: 500, openerId: "own-1" });
     transport.seed({ targetId: "user-9", type: "page", url: "https://user.test", title: "", windowId: 700 });
+    transport.seed({ targetId: "guest-3", type: "page", url: "https://agent.test", title: "", windowId: 500 });
     const client = createBrowserClient({
       namespace: "t",
       transport,
@@ -173,6 +196,7 @@ async function main(): Promise<void> {
     check(client.owns("own-1"), "reattach: persisted owned tab stays owned");
     check(client.owns("sib-2"), "reattach: live window-mate (last session's popup) is re-adopted");
     check(!client.owns("user-9"), "reattach: a tab in a DIFFERENT window is never adopted");
+    check(!client.owns("guest-3"), "reattach: a tab put in the harness window by the user or another agent is not adopted");
   }
 
   {

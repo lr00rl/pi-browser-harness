@@ -91,4 +91,13 @@ describe("CdpSession.switchTo domain enablement", () => {
     assert.equal(switched.success, false);
     assert.equal(session.current()?.targetId, "t1");
   });
+
+  test("activate:false attaches and switches without selecting the tab in its window", async () => {
+    const { stub, session } = await twoTabSession();
+    stub.calls.length = 0;
+    const switched = await session.switchTo("t2", { activate: false });
+    assert.equal(switched.success, true);
+    assert.equal(session.current()?.targetId, "t2");
+    assert.equal(stub.calls.some((c) => c.method === "Target.activateTarget"), false);
+  });
 });

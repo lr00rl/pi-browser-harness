@@ -33,7 +33,7 @@ type TabSession = {
   refSig: ReadonlyMap<string, RefSignature>;
 };
 
-type PageTarget = { readonly targetId: string; readonly type: string };
+type PageTarget = { readonly targetId: string; readonly type: string; readonly openerId?: string };
 
 const NAVIGATES: ReadonlySet<string> = new Set(["Page.navigate", "Page.reload", "Page.navigateToHistoryEntry"]);
 
@@ -60,7 +60,9 @@ export type CdpSession = {
   // The tracked, domain-enabled session for a target, if this instance holds one.
   sessionFor(targetId: string): string | undefined;
   windowId(targetId: string): Promise<Result<number, CdpError>>;
-  switchTo(targetId: string): Promise<Result<void, CdpError>>;
+  // `activate` selects the tab in its window (Target.activateTarget). It is false for tabs the harness only borrowed,
+  // so attaching to one never changes which tab the user is looking at.
+  switchTo(targetId: string, opts?: { readonly activate?: boolean }): Promise<Result<void, CdpError>>;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   setRefMap(refMap: ReadonlyMap<string, number>, refSig: ReadonlyMap<string, RefSignature>): void;
   resolveRef(ref: string): number | undefined;
@@ -347,7 +349,9 @@ export const createCdpSession = (
     return map(await req("Target.getTargets", {}, null), (r) => r.targetInfos.filter((t) => t.type === "page"));
   };
 
-  // Drops dead owned targets, then adopts every live page that shares a window with the first surviving owned tab.
+  // Drops dead owned targets, then adopts live pages in the harness window that an owned tab opened (directly or
+  // through a chain of owned openers). A tab the user, or another agent, put in that window has no owned opener and
+  // is left alone, so it is never closed at shutdown.
   const adoptHarnessWindowTabs = async (
     registry: OwnershipRegistry,
     allPages: ReadonlyArray<PageTarget>,
@@ -366,13 +370,22 @@ export const createCdpSession = (
       const windows = await Promise.all(
         allPages.map((p) => (p.targetId === anchorId ? Promise.resolve(anchorWin) : windowId(p.targetId))),
       );
-      // One replaceAll, one change notification: adding per page would persist state once per tab.
-      const adopted = allPages.filter((p, i) => {
+      const windowMates = allPages.filter((p, i) => {
         const r = windows[i];
         return !registry.isBorrowed(p.targetId) && r?.success === true && r.data === anchorWindowId;
-      }).map((p) => p.targetId);
-      const retained = registry.list().filter((id) => !registry.isBorrowed(id));
-      registry.replaceAll([...new Set([...retained, ...adopted])]);
+      });
+      const owned = new Set(registry.list().filter((id) => !registry.isBorrowed(id)));
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const p of windowMates) {
+          if (!owned.has(p.targetId) && p.openerId !== undefined && owned.has(p.openerId)) {
+            owned.add(p.targetId);
+            grew = true;
+          }
+        }
+      }
+      // One replaceAll, one change notification: adding per page would persist state once per tab.
+      registry.replaceAll([...owned]);
     }
     if (!registry.harnessWindow()) registry.setHarnessWindow(anchorId);
   };
@@ -390,7 +403,8 @@ export const createCdpSession = (
     if (createSeedTarget) return createSeedTarget();
     const created = await req(
       "Target.createTarget",
-      { url: "about:blank", ...(ownership ? { newWindow: true } : {}) },
+      // background keeps the new window behind whatever app the user is in (no macOS activation).
+      { url: "about:blank", ...(ownership ? { newWindow: true, background: true } : {}) },
       null,
     );
     if (!created.success) return created;
@@ -422,9 +436,11 @@ export const createCdpSession = (
       setCurrent(tid, attached.data);
       return ok({ targetId: tid, sessionId: attached.data });
     },
-    async switchTo(tid) {
-      const activated = await req("Target.activateTarget", { targetId: tid }, null);
-      if (!activated.success) return activated;
+    async switchTo(tid, opts) {
+      if (opts?.activate !== false) {
+        const activated = await req("Target.activateTarget", { targetId: tid }, null);
+        if (!activated.success) return activated;
+      }
       const existing = tabs.get(tid);
       if (existing) {
         setCurrent(tid, existing.sessionId);

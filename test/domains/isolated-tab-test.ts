@@ -13,15 +13,15 @@ import {
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
 
-// The fake attaches t1 as s1 and adopts it as the harness window, so an isolated tab is opened as t1's child and
-// receives the second attach result.
-const harness = (canned: Canned = {}): Promise<FakeClient> =>
+// The fake attaches t1 as s1 and adopts it as the harness window, so an isolated tab is opened by window.open in t1
+// (it lands in the harness window) and receives the second attach result.
+const harness = (canned: Canned = {}, spawnTabs: ReadonlyArray<string | null> = ["t2"]): Promise<FakeClient> =>
   createFakeClient({
     canned: {
-      "Target.createTarget": ok({ targetId: "t2" }),
       "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
       ...canned,
     },
+    spawnTabs,
   });
 
 const TAB = { targetId: "t2", sessionId: "s-iso" };
@@ -43,23 +43,26 @@ describe("openIsolatedTab", () => {
     const fake = await harness();
     const r = await openIsolatedTab(fake.client);
     assert.deepEqual(r, { success: true, data: TAB });
-    assert.deepEqual(fake.calls.map((c) => [c.method, c.params, c.sessionId]), [
-      ["Target.getTargets", {}, null],
-      ["Target.createTarget", { url: "about:blank", openerId: "t1" }, null],
-      ["Target.attachToTarget", { targetId: "t2", flatten: true }, null],
-      ["Page.enable", {}, "s-iso"],
+    assert.deepEqual(fake.calls.map((c) => [c.method, c.sessionId]), [
+      ["Target.getTargets", null],
+      ["Runtime.evaluate", "s1"],
+      ["Target.getTargets", null],
+      ["Target.attachToTarget", null],
+      ["Page.enable", "s-iso"],
     ]);
+    assert.match(String(fake.callsTo("Runtime.evaluate")[0]?.params["expression"]), /^!!window\.open\("about:blank#pi-/);
+    assert.deepEqual(fake.callsTo("Target.attachToTarget")[0]?.params, { targetId: "t2", flatten: true });
+    assert.equal(fake.callsTo("Target.createTarget").length, 0);
     assert.equal(fake.client.owns("t2"), true, "the isolated tab is owned so the harness may close it");
     assert.equal(fake.session.sessionFor("t2"), undefined, "the session is raw, not tracked");
   });
 
-  test("a failed createTarget is a cdp_error naming Target.createTarget", async () => {
-    const fake = await harness({ "Target.createTarget": err(cdpError("remote_error", "blocked")) });
+  test("a tab that cannot be opened at all is a cdp_error and nothing is attached", async () => {
+    const fake = await harness({ "Target.createTarget": err(cdpError("remote_error", "too many windows")) }, [null]);
     const r = await openIsolatedTab(fake.client);
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "cdp_error");
-    assert.equal(r.error.message, "blocked");
-    assert.deepEqual(r.error.details, { method: "Target.createTarget" });
+    assert.match(r.error.message, /blocked window\.open/);
     assert.equal(fake.callsTo("Target.attachToTarget").length, 0);
   });
 

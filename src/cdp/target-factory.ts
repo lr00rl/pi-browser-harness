@@ -1,4 +1,7 @@
-// `window.open` with userGesture is the only CDP-reachable way into a non-default browser context: createTarget rejects a foreign browserContextId and `openerId` does not inherit the opener's context.
+// `window.open` with userGesture is the only CDP-reachable way to put a tab in a chosen window, and into a non-default
+// browser context: Target.createTarget has no window or opener parameter (it picks the most recently activated window,
+// usually the user's) and rejects a browserContextId that is not the default profile's.
+// Windows are created with background:true so the harness never moves macOS focus away from the user's app.
 
 import { randomUUID } from "node:crypto";
 import type { BrowserClient } from "../client";
@@ -72,7 +75,7 @@ const spawnTabViaOpener = async (
   if (opened.data.result.value !== true) {
     return err(cdpError(
       "invalid_response",
-      "the browser blocked window.open in the pinned profile's window — the page may have navigated away; retry, or run /browser-profile to re-seed",
+      "the browser blocked window.open in the harness window — the page may have navigated away; retry, or run /browser-profile to re-seed",
       "Runtime.evaluate",
     ));
   }
@@ -86,7 +89,7 @@ const spawnTabViaOpener = async (
     }
     await new Promise((r) => setTimeout(r, SPAWN_POLL_MS));
   }
-  return err(cdpError("timeout", `the tab opened in the pinned profile did not report back within ${SPAWN_DEADLINE_MS}ms`));
+  return err(cdpError("timeout", `the tab opened in the harness window did not report back within ${SPAWN_DEADLINE_MS}ms`));
 };
 
 const inFlight = new WeakMap<BrowserClient, Promise<Result<HarnessWindow, CdpError>>>();
@@ -141,7 +144,7 @@ const ensureHarnessWindowUncoordinated = async (
 };
 
 const createDedicatedWindow = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
-  const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true });
+  const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true, background: true });
   if (!created.success) return created;
   const { targetId } = created.data;
   const ownership = client.ownership();
@@ -156,16 +159,18 @@ export const openHarnessTab = async (
   client: BrowserClient,
   openerTargetId: string,
 ): Promise<Result<string, CdpError>> => {
-  const spawned = client.profileContextId()
-    ? await spawnTabViaOpener(client, openerTargetId)
-    : await (async (): Promise<Result<string, CdpError>> => {
-        const created = await client.session().callBrowser("Target.createTarget", {
-          url: "about:blank",
-          openerId: openerTargetId,
-        });
-        if (!created.success) return created;
-        return ok(created.data.targetId);
-      })();
+  let spawned = await spawnTabViaOpener(client, openerTargetId);
+  if (!spawned.success && client.profilePin() === null) {
+    // Unpinned, a background window of its own is an acceptable home for the tab: it still stays out of the user's
+    // windows. With any pin (even one whose context is not resolved yet) createTarget would land in the default
+    // profile, i.e. the wrong account, so the window.open failure stands.
+    const created = await client.session().callBrowser("Target.createTarget", {
+      url: "about:blank",
+      newWindow: true,
+      background: true,
+    });
+    if (created.success) spawned = ok(created.data.targetId);
+  }
   if (!spawned.success) return spawned;
   client.ownership().add(spawned.data);
   return ok(spawned.data);

@@ -66,6 +66,7 @@ describe("BrowserClient.switchTab", () => {
 
     assert.equal(switched.success, true);
     assert.equal(stub.calls.some((call) => call.method === "Runtime.evaluate"), false);
+    assert.equal(stub.calls.some((call) => call.method === "Target.activateTarget"), false, "the user's visible tab is left alone");
   });
 
   test("decorates an owned tab", async () => {
@@ -76,6 +77,7 @@ describe("BrowserClient.switchTab", () => {
 
     assert.equal(switched.success, true);
     assert.equal(stub.calls.filter((call) => call.method === "Runtime.evaluate").length, 1);
+    assert.deepEqual(stub.calls.filter((call) => call.method === "Target.activateTarget").map((call) => call.params), [{ targetId: "t1" }]);
   });
 });
 
@@ -95,7 +97,8 @@ describe("BrowserClient.detach", () => {
 
 describe("BrowserClient.ensureAlive", () => {
   test("concurrent callers share one in-flight check", async () => {
-    const { stub, client } = await started();
+    // t2 shares t1's window but was not opened by it, so it is not adopted; the restart opens a fresh harness window.
+    const { stub, client } = await started({ "Target.createTarget": ok({ targetId: "t3" }) });
     // Forget the current tab so the next ensureAlive has to restart, which attaches again.
     stub.emit({ method: "Target.targetDestroyed", params: { targetId: "t1" } });
     await flush();

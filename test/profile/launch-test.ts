@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openProfileWindow } from "../../src/profile/launch";
+import { launchCommand, openProfileWindow } from "../../src/profile/launch";
 
 describe("openProfileWindow's failure reporting", () => {
   let root: string;
@@ -105,5 +105,34 @@ describe("openProfileWindow's failure reporting", () => {
       r.data.kill();
       r.data.kill();
     });
+  });
+});
+
+describe("launchCommand", () => {
+  const ARGS = ["--profile-directory=Profile 2", "--new-window", "file:///tmp/sentinel.html"];
+
+  test("on macOS a bundled browser is handed the argv through `open -g -n`, so it does not take focus", () => {
+    assert.deepEqual(
+      launchCommand("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ARGS, "darwin"),
+      { command: "open", args: ["-g", "-n", "-a", "/Applications/Google Chrome.app", "--args", ...ARGS] },
+    );
+  });
+
+  test("on macOS an executable outside an app bundle is spawned directly", () => {
+    assert.deepEqual(launchCommand("/opt/chromium/chrome", ARGS, "darwin"), { command: "/opt/chromium/chrome", args: ARGS });
+  });
+
+  test(
+    "on macOS a bundle `open` cannot launch fails fast with the exit code instead of waiting for the sentinel",
+    { skip: process.platform !== "darwin" },
+    async () => {
+      const r = await openProfileWindow({ exePath: "/nonexistent/Missing Browser.app/Contents/MacOS/Missing Browser", profileDir: "Default" });
+      assert.equal(r.success, false);
+      assert.match(r.error, /`open -g` exited with code [1-9]/);
+    },
+  );
+
+  test("elsewhere the executable is spawned directly", () => {
+    assert.deepEqual(launchCommand("/usr/bin/google-chrome", ARGS, "linux"), { command: "/usr/bin/google-chrome", args: ARGS });
   });
 });
