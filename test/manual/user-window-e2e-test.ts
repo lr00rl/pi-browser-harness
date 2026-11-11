@@ -109,7 +109,11 @@ async function main(): Promise<void> {
     if (iso.success) await closeIsolatedTab(a, iso.data);
     await a.closeOwnedTabs();
     await b.closeOwnedTabs();
-    const after = await list();
+    let after = await list();
+    const leftNow = after.map((t) => t.url.slice(0, 30)).join(" | ");
+    // Target.closeTarget is asynchronous; give Chrome a moment before calling a tab leaked.
+    for (let i = 0; i < 10 && after.length > 1; i++) { await sleep(200); after = await list(); }
+    if (leftNow.includes("|")) console.log(`   (right after cleanup: ${leftNow})`);
     check(after.length === 1 && after[0]?.targetId === userTab?.targetId, `only the user's tab is left after both sessions clean up (${after.length})`);
     await a.stop();
     await b.stop();
