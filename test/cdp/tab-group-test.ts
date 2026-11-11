@@ -39,7 +39,7 @@ const page = { targetId: "t1", url: "https://example.test/" };
 // is found by the token the harness put in its URL.
 const evaluate = (value: unknown): CannedResult => ok({ result: { type: typeof value, value } });
 
-const opts = (extra: Partial<TabGroupDeps> = {}): TabGroupDeps => ({ extensionDir: extDir, env: {}, deadlineMs: 0, ...extra });
+const opts = (extra: Partial<TabGroupDeps> = {}): TabGroupDeps => ({ extensionDir: extDir, env: { PI_BROWSER_TAB_GROUPS: "1" }, deadlineMs: 0, ...extra });
 
 type Setup = {
   readonly canned: Canned;
@@ -105,9 +105,9 @@ describe("prepareTabGroups", () => {
     assert.match(tabGroupStatus(client), /^dedicated window \(tab groups unavailable: Chrome refused/);
   });
 
-  test("PI_BROWSER_TAB_GROUPS=0 turns the feature off without touching the browser", async () => {
+  test("tab groups are off unless PI_BROWSER_TAB_GROUPS=1, and nothing touches the browser", async () => {
     const { client, fake } = await setup({ canned: { "Target.getTargets": listing(page, worker()) } });
-    const r = await prepareTabGroups(client, opts({ env: { PI_BROWSER_TAB_GROUPS: "0" } }));
+    const r = await prepareTabGroups(client, opts({ env: {} }));
     assert.equal(r.success, false);
     assert.equal(fake.calls.length, 0);
   });

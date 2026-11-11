@@ -206,7 +206,10 @@ const connectWorker = async (client: BrowserClient, state: State, deps: TabGroup
 // Resolves to the attached worker session. Concurrent callers share one attempt.
 export const prepareTabGroups = (client: BrowserClient, deps: TabGroupDeps = {}): Promise<Result<string, CdpError>> => {
   const env = deps.env ?? process.env;
-  if (env["PI_BROWSER_TAB_GROUPS"] === "0") return Promise.resolve(err(cdpError("discovery_failed", "tab groups are turned off (PI_BROWSER_TAB_GROUPS=0)")));
+  // Opt-in: on 2026-11-10 the user's real Chrome 156 (with a 157 update pending) crashed on a CHECK in the browser
+  // process half a second after the first Extensions.loadUnpacked this path sent it. Until that is understood, a
+  // real browser never receives the extension unless PI_BROWSER_TAB_GROUPS=1 is set.
+  if (env["PI_BROWSER_TAB_GROUPS"] !== "1") return Promise.resolve(err(cdpError("discovery_failed", "tab groups are off (set PI_BROWSER_TAB_GROUPS=1 to try them)")));
   if (client.tabGroupTitle() === undefined) return Promise.resolve(err(cdpError("discovery_failed", "no tab group title")));
   const state = stateFor(client);
   if (state.disabled !== undefined) return Promise.resolve(err(cdpError("discovery_failed", state.disabled)));

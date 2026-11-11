@@ -333,7 +333,8 @@ tab-group API, so the harness loads a small helper extension (`assets/agent-tabs
 `Extensions.loadUnpacked`; it stays loaded until Chrome exits and is reloaded on the next connection.
 When that is not possible (a remote browser, a browser that refuses it, or a pinned profile that is not
 the last-used one) tabs go to a dedicated background window instead. `/browser-status` says which.
-`PI_BROWSER_TAB_GROUPS=0` always uses the dedicated window.
+Tab groups are **off by default**: on a real Chrome 156 the first `Extensions.loadUnpacked` was followed by a
+browser-process crash. Set `PI_BROWSER_TAB_GROUPS=1` to opt in.
 
 **Tab ownership.** `browser_list_tabs`
 defaults to `scope:"owned"` (pass `scope:"all"` to inspect other tabs); `browser_switch_tab` accepts
@@ -479,7 +480,7 @@ listed with each.
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
-| `PI_BROWSER_TAB_GROUPS` | `0` keeps agent tabs in a dedicated background window instead of a tab group in your window. |
+| `PI_BROWSER_TAB_GROUPS` | `1` opts in to agent tab groups in your window (off by default; see "Where agent tabs go"). |
 | `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
 
 ---

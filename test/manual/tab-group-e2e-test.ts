@@ -45,6 +45,7 @@ const rawCdp = async (wsUrl: string): Promise<{ call: (m: string, p?: object, s?
 };
 
 async function main(): Promise<void> {
+  process.env["PI_BROWSER_TAB_GROUPS"] = "1";
   if (!existsSync(CHROME)) { console.log("SKIP: no Chrome at", CHROME); return; }
   const udd = mkdtempSync(join(tmpdir(), "pi-tabgroup-e2e-"));
   const socketPath = join(udd, "daemon.sock");

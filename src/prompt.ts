@@ -48,6 +48,11 @@ and tool-specific guidelines.
   Borrowed tabs are never added to ownership and must not be closed by the harness.
 - Close owned tabs once no later step needs them; only owned tabs are cleaned up
   automatically at session shutdown.
+- Never start a Chrome yourself (no \`Google Chrome --headless\`, no
+  \`--remote-debugging-port\`, no \`open -a\`), and never kill one. If
+  browser_setup reports that remote debugging is off or Chrome is not
+  running, stop and ask the user to open Chrome and re-enable
+  chrome://inspect/#remote-debugging.
 - Do not use browser_run_script to bypass borrowed-tab approval or ownership
   safety; use the raw CDP escape hatch only when the user explicitly asks for it.
 - Tools in the serialized lane (${joinShort(lanes.serialized)}) run one at a time.

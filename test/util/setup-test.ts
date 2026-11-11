@@ -148,7 +148,8 @@ describe("performSetup", () => {
       assert.equal(r.success, false);
       assert.match(r.error, /^Browser remote debugging needs to be enabled\./);
       assert.match(r.error, /chrome:\/\/inspect\/#remote-debugging/);
-      assert.match(r.error, /--remote-debugging-port=9222/);
+      assert.match(r.error, /Do not launch or kill a browser yourself/);
+      assert.doesNotMatch(r.error, /--remote-debugging-port/);
       assert.match(r.error, /BU_CDP_WS/);
     });
   }

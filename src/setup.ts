@@ -62,8 +62,7 @@ export async function performSetup(
           "Open chrome://inspect/#remote-debugging (or brave://inspect,\n" +
           "edge://inspect) in your browser, tick the\n" +
           '"Discover network targets" / Allow checkbox, then retry.\n\n' +
-          "If that doesn't expose DevTools, relaunch the browser with\n" +
-          "--remote-debugging-port=9222.\n\n" +
+          "Agent: stop here and ask the user to do this. Do not launch or kill a browser yourself.\n\n" +
           "Or set BU_CDP_WS to a remote browser WebSocket URL.",
       );
     }
