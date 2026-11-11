@@ -10,7 +10,8 @@ import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/types";
 import { type CdpSession, createCdpSession } from "./cdp/session";
 import { type OwnershipRegistry, createOwnershipRegistry, reconcileOwnership } from "./cdp/ownership";
-import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";
+import { ensureHarnessWindow, openAgentTab } from "./cdp/target-factory";
+import { maySelectTab, openGroupedTab, prepareTabGroups } from "./cdp/tab-group";
 import { seedProfileWindow } from "./profile/bind";
 import type { ProfilePin } from "./profile/store";
 import type { DaemonStatus, DialogInfo, PageInfo, PageInfoResult, TabInfo } from "./cdp/types";
@@ -40,6 +41,8 @@ export type BrowserClientOptions = {
     readonly harnessWindowId?: number;
   };
   readonly profilePin?: ProfilePin | null;
+  // Title of this session's tab group in the user's window; unset keeps agent tabs in the harness's own window.
+  readonly tabGroupTitle?: string;
   // How long one close may take to show in Chrome's target list before it is sent again; tests shorten it.
   readonly closeConfirmMs?: number;
   readonly onOwnershipChange?: (snapshot: {
@@ -77,6 +80,8 @@ export type BrowserClient = {
   profileContextId(): string | undefined;
   setProfileContextId(contextId: string | undefined): void;
   seedPinnedProfileWindow(): Promise<Result<string, CdpError>>;
+  tabGroupTitle(): string | undefined;
+  setTabGroupTitle(title: string | undefined): void;
   mutationMutex(): Mutex;
 };
 
@@ -137,7 +142,13 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       });
     });
   }
+  // The first tab of a connection: a grouped tab when tab groups work, otherwise the seed of the harness window.
   const session = createCdpSession(transport, ownership, async () => {
+    const grouped = await openGroupedTab(api);
+    if (grouped.success) {
+      ownership.add(grouped.data);
+      return grouped;
+    }
     const window = await ensureHarnessWindow(api);
     return window.success ? ok(window.data.targetId) : window;
   });
@@ -149,10 +160,13 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   let userDataDir: string | undefined;
   let profilePin: ProfilePin | null = opts.profilePin ?? null;
   let profileContextId: string | undefined;
+  let tabGroupTitle: string | undefined = opts.tabGroupTitle;
 
   // With a pin set the window must exist BEFORE anything attaches, or attachFirstPage's bare Target.createTarget lands in the focus-derived default profile.
+  // A working tab group in the pinned profile makes the window unnecessary: the seed provider opens a grouped tab.
   const seedIfPinned = async (): Promise<Result<void, CdpError>> => {
     if (!profilePin) return ok(undefined);
+    if ((await prepareTabGroups(api)).success) return ok(undefined);
     const window = await ensureHarnessWindow(api);
     if (!window.success) return window;
     return ok(undefined);
@@ -322,8 +336,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   const switchTab = async (targetId: string): Promise<Result<void, CdpError>> => {
     const owned = ownership.has(targetId);
-    // An owned tab is selected inside the harness window so it renders; a borrowed tab is attached without selecting it.
-    const r = await session.switchTo(targetId, { activate: owned });
+    // An owned tab is selected inside the harness window so it renders. A borrowed tab, or an owned tab in the user's
+    // window (a grouped tab), is attached without selecting it, so the tab the user is looking at never changes.
+    const r = await session.switchTo(targetId, { activate: owned && (await maySelectTab(api, targetId)) });
     if (!r.success) return r;
     // Only decorate tabs created by the harness. Borrowed user tabs must not be modified just by attaching.
     if (owned) {
@@ -335,17 +350,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
-    // ensureHarnessWindow lists live targets and reconciles ownership itself, so no listing is needed here.
-    const window = await ensureHarnessWindow(api);
-    if (!window.success) return window;
-    let tabId: string;
-    if (window.data.freshlyCreated) {
-      tabId = window.data.targetId;
-    } else {
-      const opened = await openHarnessTab(api, window.data.targetId);
-      if (!opened.success) return opened;
-      tabId = opened.data;
-    }
+    const opened = await openAgentTab(api);
+    if (!opened.success) return opened;
+    const tabId = opened.data;
 
     const switched = await switchTab(tabId);
     if (!switched.success) return switched;
@@ -445,6 +452,10 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
         return err(cdpError("discovery_failed", "no browser profile is selected — run /browser-profile"));
       }
       return seedProfileWindow(api, profilePin);
+    },
+    tabGroupTitle: () => tabGroupTitle,
+    setTabGroupTitle: (title) => {
+      tabGroupTitle = title;
     },
     mutationMutex: () => mutationMutex,
   };

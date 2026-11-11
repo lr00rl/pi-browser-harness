@@ -25,7 +25,7 @@ const started = async (canned: Canned = {}, closeConfirmMs?: number) => {
     namespace: "test",
     transport: stub.transport,
     remote: { cdpUrl: "ws://127.0.0.1:1/devtools/browser/abc", browserId: "abc" },
-    initialOwnership: { ownedTargetIds: ["t1"] },
+    initialOwnership: { ownedTargetIds: ["t1"], harnessWindowTargetId: "t1" },
     ...(closeConfirmMs !== undefined ? { closeConfirmMs } : {}),
   });
   const r = await client.start();
@@ -67,6 +67,18 @@ describe("BrowserClient.switchTab", () => {
     assert.equal(switched.success, true);
     assert.equal(stub.calls.some((call) => call.method === "Runtime.evaluate"), false);
     assert.equal(stub.calls.some((call) => call.method === "Target.activateTarget"), false, "the user's visible tab is left alone");
+  });
+
+  test("an owned tab outside a recorded harness window is attached without being selected", async () => {
+    // With no harness window on record an owned tab may sit in the user's window (a tab group); selecting it would
+    // change the tab the user is looking at.
+    const { stub, client } = await started();
+    client.ownership().setHarnessWindowId(undefined);
+    client.ownership().setHarnessWindow(undefined);
+    stub.calls.length = 0;
+    const switched = await client.switchTab("t1");
+    assert.equal(switched.success, true);
+    assert.equal(stub.calls.some((call) => call.method === "Target.activateTarget"), false);
   });
 
   test("decorates an owned tab", async () => {

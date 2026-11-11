@@ -54,7 +54,7 @@ describe("CdpSession harness-window adoption", () => {
   };
 
   test("adopts window-mates opened by an owned tab, transitively, and leaves strangers alone", async () => {
-    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"] });
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"], harnessWindowTargetId: "t1" });
     await attached(WINDOW_MATES, ownership);
     assert.deepEqual([...ownership.list()].sort(), ["grandchild", "popup", "t1"]);
     assert.equal(ownership.has("stranger"), false, "a tab another agent or the user put in the window is not adopted");
@@ -68,6 +68,33 @@ describe("CdpSession harness-window adoption", () => {
     const { session } = await attached(WINDOW_MATES, ownership);
     await session.attachFirstPage();
     assert.equal(ownership.has("stranger"), true);
+  });
+
+  test("owned tabs in the user's window (a tab group) never make that window the harness window", async () => {
+    // "grouped" is an owned agent tab in the user's window 1; the user opens a link from it ("user-popup"). With no
+    // recorded harness window, nothing is adopted: closing owned tabs at shutdown must not close the user's tab.
+    const canned: Canned = {
+      ...TWO_PAGES,
+      "Target.getTargets": ok({
+        targetInfos: [
+          { targetId: "grouped", type: "page", title: "Agent", url: "https://agent.test/" },
+          { targetId: "user-tab", type: "page", title: "Mine", url: "https://mine.test/" },
+          { targetId: "user-popup", type: "page", title: "Link", url: "https://link.test/", openerId: "grouped" },
+        ],
+      }),
+      "Browser.getWindowForTarget": ok({ windowId: 1 }),
+    };
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["grouped"] });
+    await attached(canned, ownership);
+    assert.deepEqual(ownership.list(), ["grouped"]);
+    assert.equal(ownership.harnessWindowId(), undefined, "the user's window is not recorded as the harness window");
+    assert.equal(ownership.harnessWindow(), undefined);
+  });
+
+  test("a recorded harness window that no longer exists is forgotten", async () => {
+    const ownership = createOwnershipRegistry({ ownedTargetIds: ["t1"], harnessWindowId: 99 });
+    await attached(TWO_PAGES, ownership);
+    assert.equal(ownership.harnessWindowId(), undefined);
   });
 
   test("with nothing owned alive, a fresh harness window is created in the background", async () => {

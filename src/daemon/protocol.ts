@@ -118,7 +118,9 @@ export const DAEMON_SOCKET_PATH =
     ? "\\\\.\\pipe\\pi-browser-daemon"
     : "/tmp/pi-browser-daemon.sock";
 
-export const DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+// Every new daemon connection makes Chrome ask "Allow remote debugging?" again and brings Chrome forward, so the
+// daemon outlives a working day of idle gaps. The socket is only reachable by this user.
+export const DAEMON_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 
 export const DAEMON_MAX_CLIENTS = 16;
 

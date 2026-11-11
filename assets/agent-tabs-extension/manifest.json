@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "pi agent tabs",
+  "version": "1.0.0",
+  "description": "Opens pi-browser-harness agent tabs in the background and files them under one tab group per pi session.",
+  "permissions": ["tabGroups", "identity", "identity.email"],
+  "background": { "service_worker": "sw.js" }
+}

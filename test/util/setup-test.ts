@@ -25,16 +25,15 @@ type SetupClient = {
   readonly started: () => number;
 };
 
-// The fake client with a pin already applied (so setup never reads the on-disk pin) and
-// configurable start / newTab / pageInfo outcomes.
+// The fake client with a pin already applied (so setup never reads the on-disk pin) and a configurable start outcome.
+// newTab is counted: setup must connect without opening a test page.
 const setupClient = async (opts: {
   readonly startError?: string;
-  readonly newTabError?: string;
-  readonly dialog?: boolean;
   readonly pin?: ProfilePin | null;
-} = {}): Promise<SetupClient> => {
+} = {}): Promise<SetupClient & { readonly newTabs: () => number }> => {
   const fake = await createFakeClient();
   let started = 0;
+  let newTabs = 0;
   const client: BrowserClient = {
     ...fake.client,
     profilePin: () => opts.pin === undefined ? PIN : opts.pin,
@@ -42,17 +41,15 @@ const setupClient = async (opts: {
       started++;
       return Promise.resolve(opts.startError === undefined ? ok(undefined) : err(cdpError("discovery_failed", opts.startError)));
     },
-    newTab: () => Promise.resolve(
-      opts.newTabError === undefined ? ok("t-new") : err(cdpError("timeout", opts.newTabError)),
-    ),
-    pageInfo: () => Promise.resolve(ok(
-      opts.dialog
-        ? { kind: "dialog", dialog: { type: "alert", message: "hi" } }
-        : { kind: "page", url: "https://github.com/", title: "GitHub", width: 1280, height: 720, scrollX: 0, scrollY: 0, pageWidth: 1280, pageHeight: 2000 },
-    )),
+    newTab: () => {
+      newTabs++;
+      return Promise.resolve(ok("t-new"));
+    },
   };
-  return { client, fake, started: () => started };
+  return { client, fake, started: () => started, newTabs: () => newTabs };
 };
+
+const CONNECTED = "Browser connected ✓\nAgent tabs: not started";
 
 describe("registerSetupCommand", () => {
   test("registers browser-setup once, with a description, and nothing else", async () => {
@@ -72,7 +69,7 @@ describe("registerSetupCommand", () => {
     registerSetupCommand(pi.pi, c.client, ready);
     const ctx = fakeCtx();
     await pi.command("browser-setup").handler("", ctx.ctx);
-    assert.deepEqual(ctx.notices, [{ message: "Browser connected ✓\nNavigated to: https://github.com/", type: "info" }]);
+    assert.deepEqual(ctx.notices, [{ message: CONNECTED, type: "info" }]);
   });
 
   test("the handler notifies a failure as an error", async () => {
@@ -106,20 +103,21 @@ describe("performSetup", () => {
     rmSync(agentDir, { recursive: true, force: true });
   });
 
-  test("with a running browser and a daemon it starts the client, opens the test tab and reports the page", async () => {
+  test("with a running browser and a daemon it starts the client and opens no test page", async () => {
     const c = await setupClient();
     const r = await performSetup(c.client, undefined, ready);
     assert.ok(r.success);
-    assert.equal(r.data, "Browser connected ✓\nNavigated to: https://github.com/");
+    assert.equal(r.data, CONNECTED);
     assert.equal(c.started(), 1);
-    assert.equal(c.fake.callsTo("Page.handleJavaScriptDialog").length, 0);
+    assert.equal(c.newTabs(), 0, "setup must not open a tab of its own");
+    assert.equal(c.fake.callsTo("Page.navigate").length, 0);
   });
 
   test("a missing pin with no UI adds the profile hint to the success text", async () => {
     const c = await setupClient({ pin: null });
     const r = await performSetup(c.client, fakeCtx({ hasUI: false }).ctx, ready);
     assert.ok(r.success);
-    assert.match(r.data, /^Browser connected ✓\nNavigated to: https:\/\/github\.com\/\nNo browser profile selected/);
+    assert.match(r.data, /^Browser connected ✓\nAgent tabs: not started\nNo browser profile selected/);
   });
 
   test("no running browser stops before the daemon or the client are touched", async () => {
@@ -162,21 +160,4 @@ describe("performSetup", () => {
     assert.equal(r.error, "Connection failed: daemon socket vanished");
   });
 
-  test("a failed test navigation is reported after the client connected", async () => {
-    const c = await setupClient({ newTabError: "Target.createTarget timed out" });
-    const r = await performSetup(c.client, undefined, ready);
-    assert.equal(r.success, false);
-    assert.equal(r.error, "Browser connected but test navigation failed: Target.createTarget timed out");
-    assert.equal(c.started(), 1);
-  });
-
-  test("an open dialog on the test tab is accepted and the URL falls back to github.com", async () => {
-    const c = await setupClient({ dialog: true });
-    const r = await performSetup(c.client, undefined, ready);
-    assert.ok(r.success);
-    assert.equal(r.data, "Browser connected ✓\nNavigated to: github.com");
-    const accepted = c.fake.callsTo("Page.handleJavaScriptDialog");
-    assert.equal(accepted.length, 1);
-    assert.deepEqual(accepted[0]?.params, { accept: true });
-  });
 });

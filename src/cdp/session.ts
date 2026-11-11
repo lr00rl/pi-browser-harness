@@ -352,42 +352,57 @@ export const createCdpSession = (
   // Drops dead owned targets, then adopts live pages in the harness window that an owned tab opened (directly or
   // through a chain of owned openers). A tab the user, or another agent, put in that window has no owned opener and
   // is left alone, so it is never closed at shutdown.
+  // The harness window is only ever one the harness created and recorded (its seed target or its window id). It is
+  // never inferred from an arbitrary owned tab: owned tabs can sit in the user's own window (a session's tab group),
+  // and treating that window as the harness's would adopt and later close the user's tabs.
   const adoptHarnessWindowTabs = async (
     registry: OwnershipRegistry,
     allPages: ReadonlyArray<PageTarget>,
     live: ReadonlySet<string>,
   ): Promise<void> => {
     const survivors = reconcileOwnership(registry, live);
-    const anchorId = survivors[0];
-    if (anchorId === undefined) {
+    if (survivors.length === 0) {
       registry.setHarnessWindowId(undefined);
       return;
     }
-    const anchorWin = await windowId(anchorId);
-    if (anchorWin.success) {
-      const anchorWindowId = anchorWin.data;
-      registry.setHarnessWindowId(anchorWindowId);
-      const windows = await Promise.all(
-        allPages.map((p) => (p.targetId === anchorId ? Promise.resolve(anchorWin) : windowId(p.targetId))),
-      );
-      const windowMates = allPages.filter((p, i) => {
+    const recordedTarget = registry.harnessWindow();
+    let anchorWindowId = registry.harnessWindowId();
+    if (recordedTarget !== undefined && live.has(recordedTarget)) {
+      const win = await windowId(recordedTarget);
+      if (win.success) anchorWindowId = win.data;
+    }
+    if (anchorWindowId === undefined) return;
+    const windows = await Promise.all(allPages.map((p) => windowId(p.targetId)));
+    if (!windows.some((r) => r.success && r.data === anchorWindowId)) {
+      // The recorded window is gone; a new one is created on demand.
+      registry.setHarnessWindowId(undefined);
+      return;
+    }
+    registry.setHarnessWindowId(anchorWindowId);
+    const inAnchor = new Set(
+      allPages.filter((_, i) => {
         const r = windows[i];
-        return !registry.isBorrowed(p.targetId) && r?.success === true && r.data === anchorWindowId;
-      });
-      const owned = new Set(registry.list().filter((id) => !registry.isBorrowed(id)));
-      for (let grew = true; grew;) {
-        grew = false;
-        for (const p of windowMates) {
-          if (!owned.has(p.targetId) && p.openerId !== undefined && owned.has(p.openerId)) {
-            owned.add(p.targetId);
-            grew = true;
-          }
+        return r?.success === true && r.data === anchorWindowId;
+      }).map((p) => p.targetId),
+    );
+    const windowMates = allPages.filter((p) => inAnchor.has(p.targetId) && !registry.isBorrowed(p.targetId));
+    const owned = new Set(registry.list().filter((id) => !registry.isBorrowed(id)));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const p of windowMates) {
+        if (!owned.has(p.targetId) && p.openerId !== undefined && owned.has(p.openerId)) {
+          owned.add(p.targetId);
+          grew = true;
         }
       }
-      // One replaceAll, one change notification: adding per page would persist state once per tab.
-      registry.replaceAll([...owned]);
     }
-    if (!registry.harnessWindow()) registry.setHarnessWindow(anchorId);
+    // One replaceAll, one change notification: adding per page would persist state once per tab.
+    registry.replaceAll([...owned]);
+    // The window's seed tab may have closed; any owned tab still in that window can stand in as its handle.
+    const recorded = registry.harnessWindow();
+    if (recorded === undefined || !inAnchor.has(recorded)) {
+      registry.setHarnessWindow([...owned].find((id) => inAnchor.has(id)));
+    }
   };
 
   const pruneDeadTabs = (live: ReadonlySet<string>): void => {

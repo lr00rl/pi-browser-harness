@@ -17,6 +17,16 @@ import type { Result } from "./util/result";
 import { activeJournal, createJournal, journalDir, setActiveJournal } from "./recipes/journal";
 import { observeCall } from "./recipes/recordable";
 import { registerRecipeCommand } from "./recipes/command";
+import { tabGroupStatus } from "./cdp/tab-group";
+import { basename } from "node:path";
+
+// The tab-group label for this pi session: the project folder plus a short session id, so two sessions in the same
+// project still get separate groups. Chrome shows group titles in a narrow chip, so it stays short.
+export const tabGroupTitleFor = (cwd: string | undefined, sessionId: string): string => {
+  const project = (cwd !== undefined ? basename(cwd) : "") || "pi";
+  const short = project.length > 18 ? `${project.slice(0, 17)}…` : project;
+  return `pi · ${short} · ${sessionId.slice(-4)}`;
+};
 
 export { defineBrowserTool } from "./util/tool";
 export type {
@@ -97,6 +107,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       const lines = [
         `Browser: ${s.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
         `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
+        `Agent tabs: ${tabGroupStatus(client)}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
@@ -158,6 +169,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
         namespace: restored.namespace,
         transport,
         profilePin,
+        tabGroupTitle: tabGroupTitleFor(asString(ctx.cwd), ctx.sessionManager.getSessionId()),
         ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
         onOwnershipChange: (snap) => {
           state = {
@@ -179,6 +191,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       });
     } else {
       client.setProfilePin(profilePin);
+      client.setTabGroupTitle(tabGroupTitleFor(asString(ctx.cwd), ctx.sessionManager.getSessionId()));
     }
 
     setActiveJournal(createJournal(journalDir(), ctx.sessionManager.getSessionId()));

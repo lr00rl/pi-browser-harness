@@ -11,7 +11,7 @@ export const setupTool = defineBrowserTool({
   name: "browser_setup",
   label: "Browser Setup",
   description:
-    "Initialize browser control. Spawns the daemon, connects to Chrome, opens a test tab. " +
+    "Initialize browser control. Spawns the daemon, connects to Chrome and attaches to an agent tab. " +
     "Call when browser tools fail with 'Browser harness not initialized'. Idempotent.",
   promptSnippet: "Initialize browser connection",
   promptGuidelines: [

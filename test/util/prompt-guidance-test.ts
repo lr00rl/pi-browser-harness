@@ -33,7 +33,8 @@ describe("browser prompt guidance", () => {
     assert.match(prompt, /ref is stale/);
     assert.match(prompt, /browser_snapshot/);
     assert.match(prompt, /Page changes/);
-    assert.match(prompt, /own(?:ed)?.*Chrome\s+window/);
+    assert.match(prompt, /this session's own tabs/);
+    assert.match(prompt, /active tab\s+never changes/);
     assert.match(prompt, /Close.*tabs/);
     assert.match(prompt, /serializ/);
     assert.match(prompt, /concurrent|parallel/);
@@ -52,7 +53,7 @@ describe("browser prompt guidance", () => {
     const disconnected = getBrowserSystemPrompt(false);
     assert.match(disconnected, /browser_setup/);
     assert.match(disconnected, /\/browser-setup/);
-    for (const rule of ["ref is stale", "Page changes", "owned Chrome window", "browser_current_tab"]) {
+    for (const rule of ["ref is stale", "Page changes", "this session's own tabs", "browser_current_tab"]) {
       assert.ok(disconnected.includes(rule), `Disconnected prompt lost: ${rule}`);
     }
     assert.doesNotMatch(prompt, /not connected yet/);

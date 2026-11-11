@@ -201,6 +201,13 @@ export const COMMANDS = {
   ),
   "Target.setDiscoverTargets": cmd(Type.Object({ discover: Type.Boolean() }), Empty),
 
+  // Loads an unpacked extension into the browser's default context (the last-used profile). Chrome accepts this over
+  // the remote-debugging connection without --enable-unsafe-extension-debugging; it lasts until Chrome exits.
+  "Extensions.loadUnpacked": cmd(
+    Type.Object({ path: Type.String(), enableInIncognito: Type.Optional(Type.Boolean()) }),
+    Type.Object({ id: Type.String() }),
+  ),
+
   "Browser.getWindowForTarget": cmd(
     Type.Object({ targetId: Type.Optional(Type.String()) }),
     Type.Object({ windowId: Type.Number(), bounds: Type.Optional(Type.Unknown()) }),

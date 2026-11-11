@@ -5,6 +5,7 @@ import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 import { isBrowserRunning } from "./profile/browser-process";
 import { promptForProfileIfUnset } from "./profile/command";
 import { type Result, err, ok } from "./util/result";
+import { tabGroupStatus } from "./cdp/tab-group";
 
 // The machine probes setup runs before touching the client. Each defaults to the real implementation.
 export type SetupDeps = {
@@ -70,18 +71,8 @@ export async function performSetup(
     return err(`Connection failed: ${msg}`);
   }
 
-  const tabResult = await client.newTab("https://github.com");
-  if (!tabResult.success) {
-    return err(`Browser connected but test navigation failed: ${tabResult.error.message}`);
-  }
-
-  const info = await client.pageInfo();
-  if (info.success && info.data.kind === "dialog") {
-    await client.session().call("Page.handleJavaScriptDialog", { accept: true });
-  }
-
-  const pageUrl = info.success && info.data.kind === "page" ? info.data.url : "github.com";
-  const lines = ["Browser connected ✓", `Navigated to: ${pageUrl}`];
+  // start() already attached to an agent tab (a fresh one when none survived), so no test page is opened.
+  const lines = ["Browser connected ✓", `Agent tabs: ${tabGroupStatus(client)}`];
   if (profileNote) lines.push(profileNote);
   return ok(lines.join("\n"));
 }

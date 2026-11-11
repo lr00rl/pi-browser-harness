@@ -5,7 +5,8 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
-import { borrowSession, ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
+import { borrowSession, ensureHarnessWindow, openAgentTab, openHarnessTab } from "../cdp/target-factory";
+import { maySelectTab, prepareTabGroups } from "../cdp/tab-group";
 import { cdpCall, cdpCallBrowser, cdpCallOnTarget, evalJs, fromClient } from "./cdp-call";
 import { pollUntil, READY_STATE_COMPLETE } from "./poll";
 
@@ -82,6 +83,13 @@ const TITLE_MARK_TIMEOUT_MS = 10_000;
 const createTabs = async (client: BrowserClient, urls: ReadonlyArray<string>): Promise<Result<ReadonlyArray<TabResult>, ToolErr>> => {
   const url0 = urls[0];
   if (url0 === undefined) return err({ kind: "invalid_args", message: "no URLs provided" });
+  // In a tab group every tab joins the session's group, so no window has to be seeded first.
+  if ((await prepareTabGroups(client)).success) {
+    return ok(await Promise.all(urls.map(async (url): Promise<TabResult> => {
+      const r = await openAgentTab(client);
+      return r.success ? { url, targetId: r.data, ok: true } : { url, targetId: "", ok: false, error: r.error.message };
+    })));
+  }
   const window = await ensureHarnessWindow(client);
   if (!window.success) return fromClient(window, "Target.createTarget");
   const seededWindow = window.data.targetId;
@@ -178,7 +186,8 @@ export const openUrlsTool = defineBrowserTool({
     const all: ReadonlyArray<TabResult> = [...settled, ...created.data.filter((t) => !t.ok)];
     const okTabs = all.filter((r) => r.ok);
     const last = okTabs[okTabs.length - 1];
-    if (last !== undefined) {
+    // A grouped tab lives in the user's window: selecting it would change the tab the user is looking at.
+    if (last !== undefined && (await maySelectTab(client, last.targetId))) {
       await cdpCallBrowser(client, "Target.activateTarget", { targetId: last.targetId });
     }
     const truncated = await applyTruncation(renderOutcomes(all, total), "urls");

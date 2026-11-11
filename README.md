@@ -325,7 +325,17 @@ no tool brings Chrome to the front, and a pinned profile's window is opened with
 same Chrome (Claude in Chrome, Codex, a second pi session) keeps its own tabs: on reconnect the harness only adopts
 tabs that one of its own tabs opened, so a tab someone else put in its window is never closed by it.
 
-**Tab ownership.** On first attach the harness opens a dedicated Chrome window. `browser_list_tabs`
+**Where agent tabs go.** Each pi session's tabs open as background tabs in your current Chrome window,
+filed under one tab group per session (`pi · <project> · <id>`). The tab you are looking at never
+changes and Chrome is never brought forward; agent tabs work without being selected. CDP has no
+tab-group API, so the harness loads a small helper extension (`assets/agent-tabs-extension`, with the
+`tabGroups`, `identity` and `identity.email` permissions) into the browser's current profile through
+`Extensions.loadUnpacked`; it stays loaded until Chrome exits and is reloaded on the next connection.
+When that is not possible (a remote browser, a browser that refuses it, or a pinned profile that is not
+the last-used one) tabs go to a dedicated background window instead. `/browser-status` says which.
+`PI_BROWSER_TAB_GROUPS=0` always uses the dedicated window.
+
+**Tab ownership.** `browser_list_tabs`
 defaults to `scope:"owned"` (pass `scope:"all"` to inspect other tabs); `browser_switch_tab` accepts
 an existing tab only when you pass its full target ID with `allowUnowned:true` and approve the
 interactive confirmation. Borrowed tabs remain outside the ownership registry, are never closed by
@@ -469,6 +479,7 @@ listed with each.
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
+| `PI_BROWSER_TAB_GROUPS` | `0` keeps agent tabs in a dedicated background window instead of a tab group in your window. |
 | `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
 
 ---

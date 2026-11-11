@@ -47,6 +47,8 @@ export type StubOptions = {
 };
 
 const WINDOW_OPEN = /window\.open\("(about:blank#pi-[^"]+)"/;
+// The agent-tabs extension's open call (src/cdp/tab-group.ts); it shares the spawnTabs queue and answers {ok:true}.
+const GROUP_OPEN = /^piOpenTab\("(about:blank#pi-[^"]+)"/;
 
 const withSpawned = (listing: CannedResult, spawned: ReadonlyArray<Record<string, unknown>>): CannedResult => {
   if (!listing.success || spawned.length === 0) return listing;
@@ -83,7 +85,15 @@ export const createStubTransport = (canned: Canned = {}, opts: StubOptions = {})
     request: (method, params, reqOpts) => {
       calls.push({ method, params, sessionId: reqOpts?.sessionId });
       if (opts.spawnTabs !== undefined && method === "Runtime.evaluate") {
-        const url = WINDOW_OPEN.exec(String(params["expression"]))?.[1];
+        const expression = String(params["expression"]);
+        const grouped = GROUP_OPEN.exec(expression)?.[1];
+        if (grouped !== undefined) {
+          const id = spawnQueue.shift();
+          if (id === undefined || id === null) return Promise.resolve(ok({ result: { type: "object", value: { ok: false, reason: "blocked" } } }));
+          spawned.push({ targetId: id, type: "page", title: "", url: grouped });
+          return Promise.resolve(ok({ result: { type: "object", value: { ok: true, groupId: 1 } } }));
+        }
+        const url = WINDOW_OPEN.exec(expression)?.[1];
         if (url !== undefined) {
           const id = spawnQueue.shift();
           if (id === undefined || id === null) return Promise.resolve(ok({ result: { type: "boolean", value: false } }));
@@ -150,7 +160,12 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     { ...DEFAULT_ATTACH, ...(opts.canned ?? {}) },
     opts.spawnTabs !== undefined ? { spawnTabs: opts.spawnTabs } : {},
   );
-  const ownership = createOwnershipRegistry({ ownedTargetIds: opts.ownedTargetIds ?? ["t1"] });
+  const ownedTargetIds = opts.ownedTargetIds ?? ["t1"];
+  // t1 plays the harness window's seed tab, recorded as it is when the harness creates that window.
+  const ownership = createOwnershipRegistry({
+    ownedTargetIds,
+    ...(ownedTargetIds.includes("t1") ? { harnessWindowTargetId: "t1" } : {}),
+  });
   const session = createCdpSession(stub.transport, ownership);
   const mutex = createMutex();
   const expressions: string[] = [];
@@ -200,6 +215,9 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     profileContextId: () => undefined,
     setProfileContextId: noop,
     seedPinnedProfileWindow: () => Promise.resolve(notConfigured("seedPinnedProfileWindow")),
+    // No group title: the fake models the dedicated-window path unless a test opts in.
+    tabGroupTitle: () => undefined,
+    setTabGroupTitle: noop,
     mutationMutex: () => mutex,
   };
 

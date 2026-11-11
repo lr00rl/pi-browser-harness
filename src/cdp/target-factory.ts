@@ -9,6 +9,7 @@ import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
 import { type CdpError, cdpError } from "./errors";
 import { reconcileOwnership } from "./ownership";
+import { openGroupedTab } from "./tab-group";
 
 const SPAWN_DEADLINE_MS = 8_000;
 const SPAWN_POLL_MS = 100;
@@ -129,10 +130,18 @@ const ensureHarnessWindowUncoordinated = async (
     if (harnessWindow && live.has(harnessWindow) && inPinnedProfile(harnessWindow)) {
       return ok({ targetId: harnessWindow, freshlyCreated: false });
     }
-    const survivor = ownership.list().find((id) => live.has(id) && inPinnedProfile(id));
-    if (survivor) {
-      ownership.setHarnessWindow(survivor);
-      return ok({ targetId: survivor, freshlyCreated: false });
+    // Only an owned tab still inside the recorded harness window may stand in for it. An owned tab elsewhere may be a
+    // grouped tab in the user's window: a window.open from it would put the new tab in the user's window.
+    const recordedWindowId = ownership.harnessWindowId();
+    if (recordedWindowId !== undefined) {
+      for (const id of ownership.list()) {
+        if (!live.has(id) || !inPinnedProfile(id)) continue;
+        const win = await client.session().windowId(id);
+        if (win.success && win.data === recordedWindowId) {
+          ownership.setHarnessWindow(id);
+          return ok({ targetId: id, freshlyCreated: false });
+        }
+      }
     }
   }
 
@@ -153,6 +162,20 @@ const createDedicatedWindow = async (client: BrowserClient): Promise<Result<stri
   const win = await client.session().windowId(targetId);
   if (win.success) ownership.setHarnessWindowId(win.data);
   return ok(targetId);
+};
+
+// The one way a new agent tab is made: a background tab in this session's tab group in the user's window, or, when
+// tab groups are unavailable, a tab in the harness's own background window. The tab is owned either way.
+export const openAgentTab = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
+  const grouped = await openGroupedTab(client);
+  if (grouped.success) {
+    client.ownership().add(grouped.data);
+    return grouped;
+  }
+  const window = await ensureHarnessWindow(client);
+  if (!window.success) return window;
+  if (window.data.freshlyCreated) return ok(window.data.targetId);
+  return openHarnessTab(client, window.data.targetId);
 };
 
 export const openHarnessTab = async (

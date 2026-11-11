@@ -1,6 +1,6 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
-import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
+import { openAgentTab } from "../cdp/target-factory";
 import { evaluateJson } from "../cdp/session";
 import type { ToolErr } from "../util/tool";
 import { cdpCallBrowser, cdpCallOnTarget, cdpErrToToolErr } from "./cdp-call";
@@ -15,16 +15,9 @@ const EVAL_TIMEOUT_MS = 15_000;
 
 export const openIsolatedTab = async (client: BrowserClient): Promise<Result<IsolatedTab, ToolErr>> => {
   // Routed through the target factory so an isolated tab lands in the pinned profile, not another profile's cookies.
-  const window = await ensureHarnessWindow(client);
-  if (!window.success) return err(cdpErrToToolErr(window.error, "Target.createTarget"));
-  let targetId: string;
-  if (window.data.freshlyCreated) {
-    targetId = window.data.targetId;
-  } else {
-    const opened = await openHarnessTab(client, window.data.targetId);
-    if (!opened.success) return err(cdpErrToToolErr(opened.error, "Target.createTarget"));
-    targetId = opened.data;
-  }
+  const opened = await openAgentTab(client);
+  if (!opened.success) return err(cdpErrToToolErr(opened.error, "Target.createTarget"));
+  const targetId = opened.data;
 
   const attached = await cdpCallBrowser(client, "Target.attachToTarget", { targetId, flatten: true });
   if (!attached.success) {
