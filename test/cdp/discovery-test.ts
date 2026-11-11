@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { endpointFromEnv, firstReadyPort, parseVersionResponse, type PortProbe } from "../../src/cdp/discovery";
+import { endpointFromEnv, firstReadyPort, ownsPort, parseVersionResponse, type PortProbe } from "../../src/cdp/discovery";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
 
@@ -84,5 +84,21 @@ describe("firstReadyPort", () => {
   test("no candidates is an immediate failure", async () => {
     const r = await firstReadyPort([], { probe: live(1), deadlineMs: 1_000 });
     assert.equal(r.success, false);
+  });
+});
+
+describe("ownsPort", () => {
+  const FILE = "/devtools/browser/b4778858-99e2-4a99-af21-10185011b288";
+  test("the browser that wrote DevToolsActivePort still owns the port", () => {
+    assert.equal(ownsPort(`ws://127.0.0.1:9222${FILE}`, FILE), true);
+  });
+  test("another browser on the same port (a headless Chrome an agent started) is refused", () => {
+    assert.equal(ownsPort("ws://127.0.0.1:9222/devtools/browser/4ba75f9f-88f0-463a-9a7e-314896087ce9", FILE), false);
+  });
+  test("a disabled /json/version (remote debugging enabled from chrome://inspect) is taken as the file's browser", () => {
+    assert.equal(ownsPort(null, FILE), true);
+  });
+  test("an unparsable url is refused", () => {
+    assert.equal(ownsPort("not a url", FILE), false);
   });
 });

@@ -119,6 +119,19 @@ const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null>
     req.end();
   });
 
+// The second line of DevToolsActivePort is the browser target path that browser wrote; /json/version on the same
+// port reports the path of whichever browser owns the port now. A different path means the browser that wrote the
+// file is gone and another one (typically a headless Chrome an agent started) took its port. A null live url means
+// /json/version is disabled, which is how Chrome serves remote debugging turned on from chrome://inspect.
+export const ownsPort = (liveUrl: string | null, filePath: string): boolean => {
+  if (liveUrl === null) return true;
+  try {
+    return new URL(liveUrl).pathname === filePath;
+  } catch {
+    return false;
+  }
+};
+
 const fallbackPorts = (): ReadonlyArray<number> => {
   const ports = new Set<number>([9222]);
   const fromEnv = process.env["BU_CDP_PORTS"];
@@ -215,6 +228,15 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   if (ready.success) {
     const c = ready.data;
     const liveUrl = await queryLiveWsUrl(c.port);
+    if (!ownsPort(liveUrl, c.path)) {
+      // Attaching would drive a browser that is not the user's while claiming the user's profile.
+      return err(cdpError(
+        "discovery_failed",
+        `port ${c.port} is held by a different browser than the one that wrote ${join(c.userDataDir, "DevToolsActivePort")} ` +
+        `(probably a headless Chrome someone started). Agent: stop and ask the user; do not kill or launch any browser. ` +
+        `User: quit that extra Chrome, open your Chrome, and re-enable chrome://inspect/#remote-debugging.`,
+      ));
+    }
     return ok({ wsUrl: liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`, userDataDir: c.userDataDir });
   }
 
