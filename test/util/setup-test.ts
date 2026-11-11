@@ -49,7 +49,7 @@ const setupClient = async (opts: {
   return { client, fake, started: () => started, newTabs: () => newTabs };
 };
 
-const CONNECTED = "Browser connected ✓\nAgent tabs: not started";
+const CONNECTED = "Browser connected ✓\nAgent tabs: a dedicated background window (the pinned profile is not the one Chrome last used, or PI_BROWSER_DEDICATED_WINDOW=1)";
 
 describe("registerSetupCommand", () => {
   test("registers browser-setup once, with a description, and nothing else", async () => {
@@ -117,7 +117,7 @@ describe("performSetup", () => {
     const c = await setupClient({ pin: null });
     const r = await performSetup(c.client, fakeCtx({ hasUI: false }).ctx, ready);
     assert.ok(r.success);
-    assert.match(r.data, /^Browser connected ✓\nAgent tabs: not started\nNo browser profile selected/);
+    assert.match(r.data, /^Browser connected ✓\nAgent tabs: a dedicated background window[^\n]*\nNo browser profile selected/);
   });
 
   test("no running browser stops before the daemon or the client are touched", async () => {

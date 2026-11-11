@@ -83,8 +83,8 @@ const TITLE_MARK_TIMEOUT_MS = 10_000;
 const createTabs = async (client: BrowserClient, urls: ReadonlyArray<string>): Promise<Result<ReadonlyArray<TabResult>, ToolErr>> => {
   const url0 = urls[0];
   if (url0 === undefined) return err({ kind: "invalid_args", message: "no URLs provided" });
-  // In a tab group every tab joins the session's group, so no window has to be seeded first.
-  if ((await prepareTabGroups(client)).success) {
+  // In a tab group, or as background tabs in the user's window, each tab is made on its own: no window is seeded.
+  if ((await prepareTabGroups(client)).success || (await client.placesTabsInUserWindow())) {
     return ok(await Promise.all(urls.map(async (url): Promise<TabResult> => {
       const r = await openAgentTab(client);
       return r.success ? { url, targetId: r.data, ok: true } : { url, targetId: "", ok: false, error: r.error.message };

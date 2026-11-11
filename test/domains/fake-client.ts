@@ -218,6 +218,8 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     // No group title: the fake models the dedicated-window path unless a test opts in.
     tabGroupTitle: () => undefined,
     setTabGroupTitle: noop,
+    // The fake models the dedicated-window path; tests of the user-window path override this.
+    placesTabsInUserWindow: () => Promise.resolve(false),
     mutationMutex: () => mutex,
   };
 

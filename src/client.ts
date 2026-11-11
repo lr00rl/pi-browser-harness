@@ -10,8 +10,8 @@ import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/types";
 import { type CdpSession, createCdpSession } from "./cdp/session";
 import { type OwnershipRegistry, createOwnershipRegistry, reconcileOwnership } from "./cdp/ownership";
-import { ensureHarnessWindow, openAgentTab } from "./cdp/target-factory";
-import { maySelectTab, openGroupedTab, prepareTabGroups } from "./cdp/tab-group";
+import { ensureHarnessWindow, openAgentTab, pinIsLastUsedProfile } from "./cdp/target-factory";
+import { maySelectTab, prepareTabGroups } from "./cdp/tab-group";
 import { seedProfileWindow } from "./profile/bind";
 import type { ProfilePin } from "./profile/store";
 import type { DaemonStatus, DialogInfo, PageInfo, PageInfoResult, TabInfo } from "./cdp/types";
@@ -82,6 +82,8 @@ export type BrowserClient = {
   seedPinnedProfileWindow(): Promise<Result<string, CdpError>>;
   tabGroupTitle(): string | undefined;
   setTabGroupTitle(title: string | undefined): void;
+  // True when agent tabs open as background tabs in the user's own window (see target-factory.ts openAgentTab).
+  placesTabsInUserWindow(): Promise<boolean>;
   mutationMutex(): Mutex;
 };
 
@@ -142,16 +144,8 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       });
     });
   }
-  // The first tab of a connection: a grouped tab when tab groups work, otherwise the seed of the harness window.
-  const session = createCdpSession(transport, ownership, async () => {
-    const grouped = await openGroupedTab(api);
-    if (grouped.success) {
-      ownership.add(grouped.data);
-      return grouped;
-    }
-    const window = await ensureHarnessWindow(api);
-    return window.success ? ok(window.data.targetId) : window;
-  });
+  // The first tab of a connection is made the same way as every later one.
+  const session = createCdpSession(transport, ownership, () => openAgentTab(api));
   const mutationMutex = createMutex();
   let lastHealth = 0;
   let healthCheck: Promise<Result<void, CdpError>> | null = null;
@@ -164,9 +158,19 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   // With a pin set the window must exist BEFORE anything attaches, or attachFirstPage's bare Target.createTarget lands in the focus-derived default profile.
   // A working tab group in the pinned profile makes the window unnecessary: the seed provider opens a grouped tab.
+  const placesTabsInUserWindow = async (): Promise<boolean> => {
+    if (process.env["PI_BROWSER_DEDICATED_WINDOW"] === "1") return false;
+    if (!profilePin) return true;
+    if (userDataDir !== undefined && userDataDir !== profilePin.userDataDir) return false;
+    return pinIsLastUsedProfile(profilePin);
+  };
+
   const seedIfPinned = async (): Promise<Result<void, CdpError>> => {
     if (!profilePin) return ok(undefined);
     if ((await prepareTabGroups(api)).success) return ok(undefined);
+    // The pinned profile is the one Target.createTarget opens in: no window has to be seeded, and seeding one
+    // (a --new-window relaunch) would raise Chrome and take focus.
+    if (await placesTabsInUserWindow()) return ok(undefined);
     const window = await ensureHarnessWindow(api);
     if (!window.success) return window;
     return ok(undefined);
@@ -454,6 +458,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       return seedProfileWindow(api, profilePin);
     },
     tabGroupTitle: () => tabGroupTitle,
+    placesTabsInUserWindow,
     setTabGroupTitle: (title) => {
       tabGroupTitle = title;
     },

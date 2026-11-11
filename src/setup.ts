@@ -5,7 +5,7 @@ import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 import { isBrowserRunning } from "./profile/browser-process";
 import { promptForProfileIfUnset } from "./profile/command";
 import { type Result, err, ok } from "./util/result";
-import { tabGroupStatus } from "./cdp/tab-group";
+import { agentTabPlacement } from "./cdp/tab-group";
 
 // The machine probes setup runs before touching the client. Each defaults to the real implementation.
 export type SetupDeps = {
@@ -71,7 +71,7 @@ export async function performSetup(
   }
 
   // start() already attached to an agent tab (a fresh one when none survived), so no test page is opened.
-  const lines = ["Browser connected ✓", `Agent tabs: ${tabGroupStatus(client)}`];
+  const lines = ["Browser connected ✓", `Agent tabs: ${await agentTabPlacement(client)}`];
   if (profileNote) lines.push(profileNote);
   return ok(lines.join("\n"));
 }

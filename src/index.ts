@@ -17,7 +17,7 @@ import type { Result } from "./util/result";
 import { activeJournal, createJournal, journalDir, setActiveJournal } from "./recipes/journal";
 import { observeCall } from "./recipes/recordable";
 import { registerRecipeCommand } from "./recipes/command";
-import { tabGroupStatus } from "./cdp/tab-group";
+import { agentTabPlacement } from "./cdp/tab-group";
 import { basename } from "node:path";
 
 // The tab-group label for this pi session: the project folder plus a short session id, so two sessions in the same
@@ -107,7 +107,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       const lines = [
         `Browser: ${s.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
         `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
-        `Agent tabs: ${tabGroupStatus(client)}`,
+        `Agent tabs: ${await agentTabPlacement(client)}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);

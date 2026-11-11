@@ -325,8 +325,11 @@ no tool brings Chrome to the front, and a pinned profile's window is opened with
 same Chrome (Claude in Chrome, Codex, a second pi session) keeps its own tabs: on reconnect the harness only adopts
 tabs that one of its own tabs opened, so a tab someone else put in its window is never closed by it.
 
-**Where agent tabs go.** Each pi session's tabs open as background tabs in your current Chrome window,
-filed under one tab group per session (`pi · <project> · <id>`). The tab you are looking at never
+**Where agent tabs go.** By default each agent tab opens as a background tab in your current Chrome window
+(`Target.createTarget` with `background:true`: the tab is not selected and the window is not raised), as
+long as the pinned profile is the one Chrome last used; otherwise the harness falls back to its own background
+window. `PI_BROWSER_DEDICATED_WINDOW=1` always uses that window. Optionally (`PI_BROWSER_TAB_GROUPS=1`) the
+tabs are also filed under one tab group per session (`pi · <project> · <id>`). The tab you are looking at never
 changes and Chrome is never brought forward; agent tabs work without being selected. CDP has no
 tab-group API, so the harness loads a small helper extension (`assets/agent-tabs-extension`, with the
 `tabGroups`, `identity` and `identity.email` permissions) into the browser's current profile through
@@ -480,6 +483,7 @@ listed with each.
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
+| `PI_BROWSER_DEDICATED_WINDOW` | `1` keeps agent tabs in a dedicated background window instead of your window. |
 | `PI_BROWSER_TAB_GROUPS` | `1` opts in to agent tab groups in your window (off by default; see "Where agent tabs go"). |
 | `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
 

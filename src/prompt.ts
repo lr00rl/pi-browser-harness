@@ -38,9 +38,9 @@ standard pi tools. Per-tool usage lives in tool descriptions, parameter schemas,
 and tool-specific guidelines.
 
 - By default, operate in this session's own tabs: background tabs in the user's
-  Chrome window, grouped under this session's tab group (or, when groups are
-  unavailable, in the harness's own background window). The user's active tab
-  never changes; owned tabs work without being selected.
+  Chrome window (or, when the pinned profile is not the one in use, in the
+  harness's own background window). The user's active tab never changes; owned
+  tabs work without being selected.
 - When the user explicitly requests control of an existing Chrome tab, call
   browser_list_tabs with scope:'all', verify its URL and title, then call
   browser_switch_tab with the exact targetId and allowUnowned:true.

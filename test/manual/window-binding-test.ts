@@ -131,6 +131,9 @@ const createMockTransport = (): CdpTransport & {
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
 
 async function main(): Promise<void> {
+  // This script tests the dedicated harness window. With nothing pinned the default is now background tabs in the
+  // user's window (see test/manual/user-window-e2e-test.ts), so opt in to the old placement explicitly.
+  process.env["PI_BROWSER_DEDICATED_WINDOW"] = "1";
   console.log("window-binding-test\n");
 
   {

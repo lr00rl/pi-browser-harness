@@ -299,6 +299,14 @@ export const maySelectTab = async (client: BrowserClient, targetId: string): Pro
   return win.success && win.data === harnessWindowId;
 };
 
+// One line for /browser-setup and /browser-status: where the next agent tab will open.
+export const agentTabPlacement = async (client: BrowserClient): Promise<string> => {
+  const title = client.tabGroupTitle();
+  if (states.get(client)?.sessionId !== undefined && title !== undefined) return `background tabs in your window, tab group "${title}"`;
+  if (await client.placesTabsInUserWindow()) return "background tabs in your window";
+  return "a dedicated background window (the pinned profile is not the one Chrome last used, or PI_BROWSER_DEDICATED_WINDOW=1)";
+};
+
 export const tabGroupStatus = (client: BrowserClient): string => {
   const state = states.get(client);
   const title = client.tabGroupTitle();

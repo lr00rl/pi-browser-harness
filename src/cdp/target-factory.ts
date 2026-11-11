@@ -10,6 +10,33 @@ import { safeJs } from "../util/js-template";
 import { type CdpError, cdpError } from "./errors";
 import { reconcileOwnership } from "./ownership";
 import { openGroupedTab } from "./tab-group";
+import { listProfiles } from "../profile/list";
+import type { ProfilePin } from "../profile/store";
+
+// Chrome 157's Target.createTarget (chrome/browser/devtools/protocol/target_handler.cc) opens in the last-used
+// profile, puts the tab in that profile's most recently activated window unless newWindow is set, and with
+// background:true uses NEW_BACKGROUND_TAB with kShowWindowInactive: the tab is not selected and the window is not
+// raised. It opens a window of its own only when that profile has none. So when the pinned profile is the last-used
+// one, a plain background createTarget is exactly "a background tab in the user's window", with no seeding and no
+// relaunch. Local State is read each time because the last-used profile changes as the user switches windows.
+export const pinIsLastUsedProfile = async (pin: ProfilePin): Promise<boolean> =>
+  (await listProfiles(pin.userDataDir)).some((p) => p.dir === pin.profileDir && p.lastUsed);
+
+const openBackgroundTabInUserWindow = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
+  const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", background: true });
+  if (!created.success) return created;
+  // A pinned profile must still match: Local State can lag a profile switch by a moment.
+  const pinnedCtx = client.profileContextId();
+  if (client.profilePin() && pinnedCtx !== undefined) {
+    const info = await client.session().callBrowser("Target.getTargetInfo", { targetId: created.data.targetId });
+    if (info.success && info.data.targetInfo.browserContextId !== undefined && info.data.targetInfo.browserContextId !== pinnedCtx) {
+      await client.session().callBrowser("Target.closeTarget", { targetId: created.data.targetId });
+      return err(cdpError("discovery_failed", "the new tab opened in another profile than the pinned one"));
+    }
+  }
+  client.ownership().add(created.data.targetId);
+  return ok(created.data.targetId);
+};
 
 const SPAWN_DEADLINE_MS = 8_000;
 const SPAWN_POLL_MS = 100;
@@ -166,11 +193,17 @@ const createDedicatedWindow = async (client: BrowserClient): Promise<Result<stri
 
 // The one way a new agent tab is made: a background tab in this session's tab group in the user's window, or, when
 // tab groups are unavailable, a tab in the harness's own background window. The tab is owned either way.
+// Order: an opt-in tab group; else a background tab in the user's own window (the default whenever the pinned
+// profile is the last-used one, or nothing is pinned); else the old dedicated harness window.
 export const openAgentTab = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
   const grouped = await openGroupedTab(client);
   if (grouped.success) {
     client.ownership().add(grouped.data);
     return grouped;
+  }
+  if (await client.placesTabsInUserWindow()) {
+    const inline = await openBackgroundTabInUserWindow(client);
+    if (inline.success) return inline;
   }
   const window = await ensureHarnessWindow(client);
   if (!window.success) return window;
